@@ -1,0 +1,20 @@
+[workspace]
+members = ["crates/inkform-core", "crates/inkform-wasm"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.0"
+authors = ["Inkform Contributors"]
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+todo = "deny"
+dbg_macro = "deny"
+
+[workspace.lints.rust]
+unsafe_code = "deny"

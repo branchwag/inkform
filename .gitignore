@@ -1,0 +1,11 @@
+/target
+/dist
+/node_modules
+/.next
+/coverage
+*.wasm
+*.log
+.DS_Store
+.env
+.env.local
+.env.*.local
