@@ -1,17 +1,18 @@
-import { StatusCard } from "@/components/status-card";
+import { StatusCard } from "../components/status-card";
+import { GeneratorWorkbench } from "../components/generator-workbench";
 
 const steps = [
   {
-    title: "Guide the sample",
-    body: "Users download a handwriting sheet, fill it out, and upload a clean photo or scan."
+    title: "Write naturally",
+    body: "Download a sheet, fill it in by hand, and snap a clear photo or scan."
   },
   {
-    title: "Process locally",
-    body: "Inkform validates, segments, and normalizes the sample using the Rust engine in the browser."
+    title: "Build your character set",
+    body: "Inkform organizes your sample into a consistent set of letters, numbers, and punctuation."
   },
   {
-    title: "Preview and export",
-    body: "The generated font is previewed against custom text before export for real-world use."
+    title: "Preview and save",
+    body: "Try your handwriting on real words, then download the generated result to keep working with it."
   }
 ];
 
@@ -52,7 +53,7 @@ export default function HomePage() {
             Inkform
           </p>
           <h1 style={{ fontSize: "clamp(2.5rem, 7vw, 5rem)", margin: "0.75rem 0 1rem" }}>
-            Turn a handwriting sheet into a usable font.
+            Turn your handwriting into a digital typeface.
           </h1>
           <p
             style={{
@@ -63,8 +64,8 @@ export default function HomePage() {
               margin: 0
             }}
           >
-            A Rust-first app designed for Vercel Hobby. The upload flow lives on the web, while the
-            generation engine is structured for browser-side execution through WebAssembly.
+            Upload a handwriting sheet, preview your words, and save the result in one simple flow.
+            Inkform is built to make personal handwriting feel ready for digital use.
           </p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem", marginTop: "1.5rem" }}>
             <a
@@ -76,7 +77,7 @@ export default function HomePage() {
                 color: "#fff8f2"
               }}
             >
-              View workflow
+              See how it works
             </a>
             <a
               href="https://openai.devpost.com/rules"
@@ -104,6 +105,8 @@ export default function HomePage() {
             <StatusCard key={step.title} title={step.title} body={step.body} />
           ))}
         </section>
+
+        <GeneratorWorkbench />
       </section>
     </main>
   );

@@ -1,7 +1,9 @@
 /target
 /dist
 /node_modules
+frontend/node_modules
 /.next
+frontend/.next
 /coverage
 *.wasm
 *.log
@@ -9,3 +11,6 @@
 .env
 .env.local
 .env.*.local
+/frontend/public/wasm/*
+!/frontend/public/wasm/.gitignore
+/frontend/tsconfig.tsbuildinfo

@@ -37,6 +37,12 @@ npm run lint
 npm run typecheck
 ```
 
+To build the browser WASM package:
+
+```bash
+bash scripts/build-wasm.sh
+```
+
 ## Hackathon Notes
 
 - Primary track: `Apps for Your Life`

@@ -2,11 +2,46 @@ use inkform_core::{
     FontArtifact, InkformError, InkformErrorKind, PreviewRequest, PreviewResponse, SampleImage,
     SampleQuality, ScriptPack, ValidationReport, generate_font, preview_text, validate_sample,
 };
+use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WasmGenerationResult {
     pub font_artifact: FontArtifact,
     pub validation_report: ValidationReport,
+}
+
+/// Generate a JSON payload for browser-side preview and artifact display.
+///
+/// # Errors
+///
+/// Returns a JavaScript error when validation, generation, or preview creation
+/// fails for the provided sample.
+#[wasm_bindgen]
+pub fn generate_font_json(
+    bytes: Vec<u8>,
+    width: u32,
+    height: u32,
+    preview_text: &str,
+) -> Result<String, JsError> {
+    let sample = SampleImage {
+        width,
+        height,
+        bytes,
+        quality: SampleQuality::Clean,
+    };
+    let script_pack = ScriptPack::latin_extended();
+    let validation_report =
+        validate_sample(&sample, &script_pack).map_err(|error| map_to_js_error(&error))?;
+    let font_artifact =
+        generate_font(&sample, &script_pack).map_err(|error| map_to_js_error(&error))?;
+    let preview_response = preview_generated_text(&font_artifact, preview_text)
+        .map_err(|error| map_to_js_error(&error))?;
+
+    Ok(build_generation_payload(
+        &validation_report,
+        &font_artifact,
+        &preview_response,
+    ))
 }
 
 /// Validate sample bytes against the default Latin-extended script pack.
@@ -81,6 +116,87 @@ pub fn preview_generated_text(
             text: String::from(text),
         },
     )
+}
+
+fn map_to_js_error(error: &InkformError) -> JsError {
+    JsError::new(error.message())
+}
+
+fn build_generation_payload(
+    validation_report: &ValidationReport,
+    font_artifact: &FontArtifact,
+    preview_response: &PreviewResponse,
+) -> String {
+    let validation_notes = validation_report
+        .notes
+        .iter()
+        .map(|note| format!("\"{}\"", escape_json(note)))
+        .collect::<Vec<_>>()
+        .join(",");
+    let unsupported_characters = preview_response
+        .unsupported_characters
+        .iter()
+        .map(|character| format!("\"{}\"", escape_json(&character.to_string())))
+        .collect::<Vec<_>>()
+        .join(",");
+    let binary_bytes = font_artifact
+        .binary
+        .iter()
+        .map(u8::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+
+    format!(
+        concat!(
+            "{{",
+            "\"validation\":{{",
+            "\"accepted\":{},",
+            "\"notes\":[{}],",
+            "\"glyphTargetCount\":{}",
+            "}},",
+            "\"artifact\":{{",
+            "\"familyName\":\"{}\",",
+            "\"scriptPackId\":\"{}\",",
+            "\"glyphCount\":{},",
+            "\"binaryLabel\":\"{}\",",
+            "\"downloadName\":\"{}\",",
+            "\"mimeType\":\"{}\",",
+            "\"bytes\":[{}]",
+            "}},",
+            "\"preview\":{{",
+            "\"renderPlan\":\"{}\",",
+            "\"unsupportedCharacters\":[{}]",
+            "}}",
+            "}}"
+        ),
+        validation_report.accepted,
+        validation_notes,
+        validation_report.glyph_target_count,
+        escape_json(&font_artifact.family_name),
+        escape_json(&font_artifact.script_pack_id),
+        font_artifact.glyphs.len(),
+        escape_json("inkform-wasm-artifact"),
+        escape_json("inkform-preview-package.txt"),
+        escape_json("text/plain;charset=utf-8"),
+        binary_bytes,
+        escape_json(&preview_response.render_plan),
+        unsupported_characters
+    )
+}
+
+fn escape_json(value: &str) -> String {
+    value.chars().fold(String::new(), |mut escaped, character| {
+        match character {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            _ => escaped.push(character),
+        }
+
+        escaped
+    })
 }
 
 #[cfg(test)]

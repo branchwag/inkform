@@ -46,6 +46,21 @@
 - Keep the runtime model compatible with browser execution
 - Avoid designs that depend on long-running Vercel functions
 
+## Dependency Safety Rules
+
+- Do not install new npm packages blindly
+- Verify direct frontend dependencies against primary sources before install when versions change
+- Prefer exact pinned versions over broad ranges
+- Prefer first-party or widely established packages unless there is a strong reason otherwise
+- Use `npm install --ignore-scripts` first when introducing or refreshing frontend dependencies
+- Inspect lockfile and dependency tree before normalizing the install flow
+- Treat supply-chain risk as a product risk, not just a tooling detail
+
+## Context Maintenance
+
+- Periodically check whether new decisions, risks, workflow rules, or environment notes should be added to `AGENTS.md`
+- Treat `AGENTS.md` as the durable project memory, not a one-time setup file
+
 ## Submission Checklist
 
 - [ ] Runnable app deployed to a public URL
@@ -60,11 +75,11 @@
 - Flesh out the handwriting sheet format and upload flow
 - Replace placeholder font generation artifacts with real vector/font assembly
 - Integrate the Rust wrapper with a compiled WASM delivery path
-- Install frontend dependencies and validate local Next.js tooling
+- Add real image decoding and font export behavior beyond the current placeholder artifact
 
 ## Known Risks
 
 - Real handwriting-to-font generation is substantially more complex than the current scaffold
 - Browser-side processing must be kept performant enough for Vercel Hobby delivery
 - CJK and other large scripts remain a roadmap item, not current functionality
-- Sandbox restrictions currently prevent normal writable `.git` initialization
+- Frontend `npm audit` currently reports a moderate transitive `postcss < 8.5.10` issue through `next@16.2.10`; do not use `npm audit fix --force` because the suggested downgrade path is invalid for this project

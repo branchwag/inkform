@@ -1,10 +1,15 @@
-import nextPlugin from "eslint-config-next";
+import nextVitals from "eslint-config-next/core-web-vitals";
 
-export default [
-  ...nextPlugin,
+const config = [
+  {
+    ignores: ["public/wasm/**"]
+  },
+  ...nextVitals,
   {
     rules: {
       "react/no-unescaped-entities": "off"
     }
   }
 ];
+
+export default config;
