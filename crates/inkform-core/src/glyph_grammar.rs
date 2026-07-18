@@ -505,21 +505,25 @@ const fn recipes_for_character(character: char) -> Option<&'static [StrokeRecipe
             closed: false,
             thickness_scale: 0.82,
         }]),
-        'a' => Some(&[StrokeRecipe {
-            points: &[
-                (300.0, 460.0),
-                (170.0, 360.0),
-                (160.0, 170.0),
-                (300.0, 80.0),
-                (410.0, 220.0),
-                (310.0, 350.0),
-                (200.0, 280.0),
-                (350.0, 260.0),
-                (400.0, 40.0),
-            ],
-            closed: false,
-            thickness_scale: 0.82,
-        }]),
+        'a' => Some(&[
+            StrokeRecipe {
+                points: &[
+                    (275.0, 410.0),
+                    (175.0, 335.0),
+                    (165.0, 175.0),
+                    (270.0, 85.0),
+                    (375.0, 165.0),
+                    (370.0, 330.0),
+                ],
+                closed: true,
+                thickness_scale: 0.76,
+            },
+            StrokeRecipe {
+                points: &[(375.0, 335.0), (400.0, 45.0), (450.0, 30.0)],
+                closed: false,
+                thickness_scale: 0.72,
+            },
+        ]),
         'b' => Some(&[
             StrokeRecipe {
                 points: &[(130.0, 0.0), (135.0, 760.0)],
@@ -570,27 +574,27 @@ const fn recipes_for_character(character: char) -> Option<&'static [StrokeRecipe
             },
         ]),
         'e' => Some(&[
-            // Leave only a narrow right-side exit. This distinguishes `e` from
-            // the fully closed, theta-like bowl produced by a closed contour.
+            // The sample's `e` is a compact, low loop instead of a full-height
+            // circular bowl.
             StrokeRecipe {
                 points: &[
-                    (385.0, 190.0),
-                    (250.0, 80.0),
-                    (165.0, 145.0),
-                    (140.0, 245.0),
-                    (185.0, 325.0),
-                    (295.0, 340.0),
-                    (385.0, 255.0),
-                    (390.0, 205.0),
-                    (430.0, 260.0),
+                    (350.0, 175.0),
+                    (260.0, 105.0),
+                    (180.0, 135.0),
+                    (150.0, 205.0),
+                    (185.0, 275.0),
+                    (280.0, 290.0),
+                    (355.0, 230.0),
+                    (365.0, 190.0),
+                    (405.0, 230.0),
                 ],
                 closed: false,
-                thickness_scale: 0.8,
+                thickness_scale: 0.76,
             },
             StrokeRecipe {
-                points: &[(150.0, 220.0), (330.0, 220.0)],
+                points: &[(150.0, 205.0), (300.0, 205.0)],
                 closed: false,
-                thickness_scale: 0.7,
+                thickness_scale: 0.66,
             },
         ]),
         'f' => Some(&[
