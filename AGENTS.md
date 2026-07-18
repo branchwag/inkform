@@ -45,6 +45,9 @@
 - Centerline extraction uses bounded Zhang-Suen thinning on an adaptive-resolution bitmap. Reuse
   only one- or two-trajectory anchors with bounded complexity; connected cursive photos that split
   into many branches must inform style synthesis rather than be replayed as illegible glyphs
+- Normalize generated contours into a stable `-280..880` vertical design range before TTF metrics
+  are written. Freeform extraction can otherwise exceed the 1000-unit em and make Windows Font
+  Viewer scale the preview to an apparently blank result.
 - For strongly cursive samples, only glyphs with naturally open terminals receive a thin exit
   stroke that overlaps the following glyph; closed bowls and counters prioritize legibility over
   a synthetic connector. Keep this as one shared contextual connection strategy, not a full

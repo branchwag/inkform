@@ -12,6 +12,8 @@ const UNITS_PER_EM: u16 = 1000;
 const ASCENDER: i16 = 820;
 const DESCENDER: i16 = -220;
 const LINE_GAP: i16 = 180;
+const MAX_GLYPH_ASCENDER: i16 = 880;
+const MIN_GLYPH_DESCENDER: i16 = -280;
 
 #[derive(Debug, Clone)]
 struct GlyphDefinition {
@@ -374,6 +376,7 @@ fn build_glyph_shapes(
         {
             contours.push(join_stroke);
         }
+        fit_contours_to_vertical_metrics(&mut contours);
         generated.push(GeneratedGlyph {
             character: candidate,
             advance_width,
@@ -383,6 +386,42 @@ fn build_glyph_shapes(
     }
 
     generated
+}
+
+fn fit_contours_to_vertical_metrics(contours: &mut [Vec<(i16, i16)>]) {
+    let maximum = contours.iter().flatten().map(|(_, y)| *y).max();
+    let minimum = contours.iter().flatten().map(|(_, y)| *y).min();
+    let (Some(maximum), Some(minimum)) = (maximum, minimum) else {
+        return;
+    };
+
+    let needs_upper_scale = maximum > MAX_GLYPH_ASCENDER;
+    let needs_lower_scale = minimum < MIN_GLYPH_DESCENDER;
+    let upper_scale = if needs_upper_scale {
+        f32::from(MAX_GLYPH_ASCENDER) / f32::from(maximum)
+    } else {
+        1.0
+    };
+    let lower_scale = if needs_lower_scale {
+        f32::from(MIN_GLYPH_DESCENDER) / f32::from(minimum)
+    } else {
+        1.0
+    };
+
+    if !needs_upper_scale && !needs_lower_scale {
+        return;
+    }
+
+    for contour in contours {
+        for point in contour {
+            let scale = if point.1 >= 0 {
+                upper_scale
+            } else {
+                lower_scale
+            };
+            point.1 = round_to_i16(f32::from(point.1) * scale);
+        }
+    }
 }
 
 fn normalize_contours_to_left_bearing(contours: &mut [Vec<(i16, i16)>], left_side_bearing: i16) {
@@ -2581,6 +2620,18 @@ mod tests {
 
         assert_eq!(super::vertical_ascender(metrics), 900);
         assert_eq!(super::vertical_descender(metrics), -820);
+    }
+
+    #[test]
+    fn fits_generated_contours_inside_the_em_vertical_range() {
+        let mut contours = vec![vec![(20_i16, -840_i16), (100, 0), (180, 1420)]];
+
+        super::fit_contours_to_vertical_metrics(&mut contours);
+
+        let points = &contours[0];
+        assert!(points.iter().all(|(_, y)| *y >= super::MIN_GLYPH_DESCENDER));
+        assert!(points.iter().all(|(_, y)| *y <= super::MAX_GLYPH_ASCENDER));
+        assert!(points.iter().any(|(_, y)| *y == 0));
     }
 
     #[test]
