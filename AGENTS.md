@@ -53,6 +53,8 @@
 - `frontend` runs `npm run wasm:build` automatically before `npm run build`
 - If the browser starts showing a generic placeholder preview again, first verify that the WASM bundle was rebuilt from current Rust sources
 - In restricted sandboxes, `wasm-pack` may fail because `wasm-bindgen` install/cache paths are not writable or network access is unavailable; a local machine run is the source of truth for browser-side validation
+- The current preview fallback path is `svg-v3`, which is tuned to visually match the generated TTF more closely when the browser cannot load the font directly
+- FreeType-based validation (`fc-scan`, ImageMagick render, `woff2_compress`) currently accepts the generated TTF, but Zen browser may still reject direct `FontFace` loading and fall back to SVG preview
 
 ## Dependency Safety Rules
 

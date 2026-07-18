@@ -1,7 +1,7 @@
 import type { GenerationResult, ValidationReport } from "./engine-types";
 
 const LATIN_EXTENDED_GLYPH_TARGET = 119;
-const PREVIEW_VERSION = "svg-v2";
+const PREVIEW_VERSION = "svg-v3";
 
 export function validateUpload(file: File): ValidationReport {
   const notes = [

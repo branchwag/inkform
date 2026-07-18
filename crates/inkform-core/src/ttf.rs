@@ -271,39 +271,15 @@ fn build_glyph_shapes(
         let seed = mix_seed(base_seed, *character);
         let hinted_shape = select_shape_for_glyph(&extracted_shapes, candidate, glyph_index, seed);
         let reference_style = reference_style(style_profile, hinted_shape);
-        let remixed_contours = select_remixed_shape(
-            &extracted_shapes,
-            candidate,
-            glyph_index,
-            glyphs.len(),
-            style_profile,
-            seed,
-        )
-        .map(|outline| vec![outline]);
         let base_font_glyph = base_font_glyph(candidate)
             .map(|contours| deform_base_font_contours(candidate, &contours, reference_style, seed));
         let reference_glyph = build_reference_glyph(candidate, reference_style, seed);
         let advance_width = glyph_advance_width(candidate);
         let contours = match base_font_glyph {
-            Some(contours)
-                if remixed_contours.is_none()
-                    && !contours.is_empty()
-                    && matches!(
-                        classify_glyph(candidate),
-                        GlyphKind::Digit | GlyphKind::Punctuation
-                    ) =>
-            {
-                contours
-            }
-            _ => match remixed_contours {
+            Some(contours) if !contours.is_empty() => contours,
+            _ => match reference_glyph {
                 Some(contours) if !contours.is_empty() => contours,
-                _ => match base_font_glyph {
-                    Some(contours) if !contours.is_empty() => contours,
-                    _ => match reference_glyph {
-                        Some(contours) if !contours.is_empty() => contours,
-                        _ => algorithmic_contours(candidate, advance_width, seed, style_profile),
-                    },
-                },
+                _ => algorithmic_contours(candidate, advance_width, seed, style_profile),
             },
         };
         generated.push(GeneratedGlyph {
@@ -1542,11 +1518,11 @@ fn build_preview_svg_from_generated(
         .iter()
         .map(|glyph| (glyph.character, glyph))
         .collect::<HashMap<_, _>>();
-    let preview_scale = 0.18_f32;
-    let line_height = 220_i32;
-    let baseline_offset = 170_i32;
+    let preview_scale = 0.075_f32;
+    let line_height = 108_i32;
+    let baseline_offset = 88_i32;
     let left_padding = 40_i32;
-    let max_line_width = 1240_i32;
+    let max_line_width = 2400_i32;
     let mut x = left_padding;
     let mut y = baseline_offset;
     let mut max_x = left_padding;

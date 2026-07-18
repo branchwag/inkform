@@ -2,11 +2,12 @@
 
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { loadGeneratedBrowserFont } from "../lib/browser-font-preview";
 import { generateInkformResult, type EngineMode } from "../lib/inkform-engine";
 import type { GenerationResult } from "../lib/engine-types";
 
 const starterText = "The quick brown fox jumps over the lazy dog.";
-const currentPreviewVersion = "svg-v2";
+const currentPreviewVersion = "svg-v3";
 
 export function GeneratorWorkbench() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -106,21 +107,19 @@ export function GeneratorWorkbench() {
     }
 
     let cancelled = false;
-    const familyName = `${result.artifact.familyName}-${result.artifact.binaryLabel}-${result.artifact.binaryHash}`;
-    const blob = new Blob([Uint8Array.from(result.artifact.bytes)], {
-      type: result.artifact.mimeType
-    });
-    const objectUrl = URL.createObjectURL(blob);
-    const fontFace = new FontFace(familyName, `url("${objectUrl}") format("truetype")`);
+    let cleanupPreviewFont = () => {};
+    let loadedFontFace: FontFace | null = null;
 
-    void fontFace
-      .load()
-      .then((loadedFace) => {
+    void loadGeneratedBrowserFont(result.artifact)
+      .then(({ cleanup, familyName, fontFace }) => {
         if (cancelled) {
+          cleanup();
           return;
         }
 
-        document.fonts.add(loadedFace);
+        cleanupPreviewFont = cleanup;
+        loadedFontFace = fontFace;
+        document.fonts.add(fontFace);
         setPreviewFontFamily(familyName);
         setPreviewFontState("loaded");
       })
@@ -133,8 +132,10 @@ export function GeneratorWorkbench() {
 
     return () => {
       cancelled = true;
-      document.fonts.delete(fontFace);
-      URL.revokeObjectURL(objectUrl);
+      if (loadedFontFace !== null) {
+        document.fonts.delete(loadedFontFace);
+      }
+      cleanupPreviewFont();
     };
   }, [result]);
 
