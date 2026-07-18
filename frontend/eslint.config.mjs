@@ -2,7 +2,7 @@ import nextVitals from "eslint-config-next/core-web-vitals";
 
 const config = [
   {
-    ignores: ["public/wasm/**"]
+    ignores: ["public/wasm/**", "src/lib/generated/**"]
   },
   ...nextVitals,
   {

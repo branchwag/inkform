@@ -36,7 +36,12 @@ pub fn build_glyph_from_grammar(
     seed: u64,
 ) -> Option<Vec<Vec<(i16, i16)>>> {
     let (base_character, accents) = decompose_character(character);
-    let recipes = recipes_for_character(base_character)?;
+    let recipes = if style.cursive_score >= 0.68 {
+        looped_recipes_for_character(base_character)
+            .or_else(|| recipes_for_character(base_character))?
+    } else {
+        recipes_for_character(base_character)?
+    };
     let mut contours = Vec::new();
 
     for recipe in recipes {
@@ -562,20 +567,29 @@ const fn recipes_for_character(character: char) -> Option<&'static [StrokeRecipe
                 thickness_scale: 0.8,
             },
         ]),
-        'e' => Some(&[StrokeRecipe {
-            points: &[
-                (390.0, 280.0),
-                (240.0, 280.0),
-                (160.0, 220.0),
-                (200.0, 90.0),
-                (350.0, 100.0),
-                (390.0, 210.0),
-                (330.0, 380.0),
-                (190.0, 390.0),
-            ],
-            closed: false,
-            thickness_scale: 0.8,
-        }]),
+        'e' => Some(&[
+            // Leave only a narrow right-side exit. This distinguishes `e` from
+            // the fully closed, theta-like bowl produced by a closed contour.
+            StrokeRecipe {
+                points: &[
+                    (385.0, 190.0),
+                    (250.0, 80.0),
+                    (165.0, 145.0),
+                    (140.0, 245.0),
+                    (185.0, 325.0),
+                    (295.0, 340.0),
+                    (385.0, 255.0),
+                    (430.0, 260.0),
+                ],
+                closed: false,
+                thickness_scale: 0.8,
+            },
+            StrokeRecipe {
+                points: &[(150.0, 220.0), (330.0, 220.0)],
+                closed: false,
+                thickness_scale: 0.7,
+            },
+        ]),
         'f' => Some(&[
             StrokeRecipe {
                 points: &[
@@ -698,17 +712,23 @@ const fn recipes_for_character(character: char) -> Option<&'static [StrokeRecipe
             closed: false,
             thickness_scale: 0.76,
         }]),
-        'n' => Some(&[StrokeRecipe {
-            points: &[
-                (130.0, 20.0),
-                (140.0, 420.0),
-                (240.0, 320.0),
-                (360.0, 420.0),
-                (390.0, 20.0),
-            ],
-            closed: false,
-            thickness_scale: 0.76,
-        }]),
+        'n' => Some(&[
+            StrokeRecipe {
+                points: &[(140.0, 20.0), (145.0, 420.0)],
+                closed: false,
+                thickness_scale: 0.76,
+            },
+            StrokeRecipe {
+                points: &[
+                    (150.0, 420.0),
+                    (250.0, 400.0),
+                    (365.0, 295.0),
+                    (375.0, 20.0),
+                ],
+                closed: false,
+                thickness_scale: 0.76,
+            },
+        ]),
         'o' => Some(&[StrokeRecipe {
             points: &[
                 (280.0, 430.0),
@@ -1199,6 +1219,156 @@ const fn recipes_for_character(character: char) -> Option<&'static [StrokeRecipe
             ],
             closed: false,
             thickness_scale: 0.78,
+        }]),
+        _ => None,
+    }
+}
+
+// These variants are only selected after the source image strongly signals a
+// cursive hand. They preserve familiar descender loops without forcing them on
+// print-like samples.
+#[allow(clippy::too_many_lines)]
+const fn looped_recipes_for_character(character: char) -> Option<&'static [StrokeRecipe]> {
+    match character {
+        'f' => Some(&[
+            StrokeRecipe {
+                points: &[
+                    (250.0, -190.0),
+                    (250.0, 400.0),
+                    (145.0, 610.0),
+                    (230.0, 755.0),
+                    (350.0, 680.0),
+                    (315.0, 535.0),
+                    (230.0, 430.0),
+                ],
+                closed: false,
+                thickness_scale: 0.8,
+            },
+            StrokeRecipe {
+                points: &[(105.0, 405.0), (350.0, 405.0)],
+                closed: false,
+                thickness_scale: 0.56,
+            },
+        ]),
+        'g' => Some(&[
+            StrokeRecipe {
+                points: &[
+                    (335.0, 390.0),
+                    (190.0, 365.0),
+                    (145.0, 205.0),
+                    (250.0, 85.0),
+                    (385.0, 150.0),
+                    (360.0, 315.0),
+                    (270.0, 390.0),
+                ],
+                closed: true,
+                thickness_scale: 0.76,
+            },
+            StrokeRecipe {
+                points: &[
+                    (350.0, 200.0),
+                    (355.0, -130.0),
+                    (275.0, -225.0),
+                    (150.0, -180.0),
+                    (165.0, -65.0),
+                    (275.0, -85.0),
+                    (325.0, -180.0),
+                ],
+                closed: false,
+                thickness_scale: 0.7,
+            },
+        ]),
+        'j' => Some(&[
+            StrokeRecipe {
+                points: &[
+                    (320.0, 420.0),
+                    (305.0, 20.0),
+                    (255.0, -190.0),
+                    (135.0, -205.0),
+                    (85.0, -100.0),
+                    (170.0, -45.0),
+                    (270.0, -115.0),
+                    (280.0, -205.0),
+                ],
+                closed: false,
+                thickness_scale: 0.74,
+            },
+            StrokeRecipe {
+                points: &[
+                    (300.0, 610.0),
+                    (320.0, 650.0),
+                    (340.0, 610.0),
+                    (320.0, 570.0),
+                ],
+                closed: true,
+                thickness_scale: 0.42,
+            },
+        ]),
+        'p' => Some(&[
+            StrokeRecipe {
+                points: &[(145.0, -205.0), (145.0, 420.0)],
+                closed: false,
+                thickness_scale: 0.82,
+            },
+            StrokeRecipe {
+                points: &[
+                    (175.0, 385.0),
+                    (325.0, 400.0),
+                    (400.0, 265.0),
+                    (320.0, 90.0),
+                    (165.0, 125.0),
+                ],
+                closed: true,
+                thickness_scale: 0.74,
+            },
+            StrokeRecipe {
+                points: &[(145.0, -120.0), (210.0, -205.0), (285.0, -145.0)],
+                closed: false,
+                thickness_scale: 0.62,
+            },
+        ]),
+        'q' => Some(&[
+            StrokeRecipe {
+                points: &[
+                    (330.0, 390.0),
+                    (185.0, 360.0),
+                    (145.0, 200.0),
+                    (255.0, 85.0),
+                    (390.0, 155.0),
+                    (350.0, 325.0),
+                ],
+                closed: true,
+                thickness_scale: 0.74,
+            },
+            StrokeRecipe {
+                points: &[
+                    (370.0, 390.0),
+                    (375.0, -120.0),
+                    (300.0, -220.0),
+                    (190.0, -175.0),
+                    (210.0, -75.0),
+                    (310.0, -105.0),
+                    (340.0, -190.0),
+                ],
+                closed: false,
+                thickness_scale: 0.78,
+            },
+        ]),
+        'y' => Some(&[StrokeRecipe {
+            points: &[
+                (145.0, 420.0),
+                (255.0, 105.0),
+                (350.0, 420.0),
+                (315.0, 5.0),
+                (255.0, -175.0),
+                (130.0, -205.0),
+                (90.0, -105.0),
+                (180.0, -50.0),
+                (285.0, -115.0),
+                (300.0, -195.0),
+            ],
+            closed: false,
+            thickness_scale: 0.72,
         }]),
         _ => None,
     }

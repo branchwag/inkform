@@ -64,8 +64,7 @@ async function loadWasmModule(): Promise<WasmModule | null> {
   }
 
   try {
-    const dynamicImport = (specifier: string) => import(/* webpackIgnore: true */ specifier);
-    const wasmExports = (await dynamicImport("/wasm/inkform_wasm.js")) as unknown as WasmModule;
+    const wasmExports = (await import("./generated/inkform_wasm.js")) as unknown as WasmModule;
     await wasmExports.default({
       module_or_path: "/wasm/inkform_wasm_bg.wasm"
     });
