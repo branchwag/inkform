@@ -1,20 +1,27 @@
 # Inkform
 
-Inkform is a Rust-first web app that turns guided handwriting samples into a downloadable font. The current build targets a Vercel Hobby deployment with a Next.js frontend and a Rust workspace that is structured for WebAssembly execution in the browser.
+Inkform is a Rust-first web app that turns a freeform handwriting photo into a downloadable font. It runs its generation pipeline in the browser through WebAssembly, making it compatible with a Vercel Hobby deployment without an always-on backend.
+
+## See It In Action
+
+![Inkform landing page with the handwriting upload flow](docs/images/inkform-overview.jpg)
+
+![Inkform generated font preview and TrueType download action](docs/images/inkform-generation-preview.jpg)
 
 ## Status
 
-This repository currently contains the production scaffold for the hackathon build:
+This repository contains the working hackathon build:
 
-- Rust workspace with a core engine crate and a WASM-facing wrapper crate
+- Rust workspace with a core font engine and a WASM-facing wrapper crate
 - Test suite for the Rust core and wrapper layers
 - Clippy, formatting, and test quality gates
-- Next.js frontend scaffold with a product-facing landing flow
+- Next.js frontend with upload, preview, and TrueType download flow
+- Browser-compatible TTF assembly and in-browser font loading
 - `AGENTS.md` as the durable project context log
 
 ## Repository Layout
 
-- `crates/inkform-core`: deterministic Rust domain logic for validation, glyph extraction planning, normalization, preview, and generation orchestration
+- `crates/inkform-core`: deterministic Rust logic for validation, image extraction, glyph synthesis, preview, and TTF generation
 - `crates/inkform-wasm`: browser-facing Rust wrapper around the core crate
 - `frontend`: Next.js app intended for Vercel Hobby hosting
 - `.github/workflows/ci.yml`: CI checks for formatting, clippy, and tests
@@ -32,7 +39,7 @@ The frontend should also be checked once dependencies are installed:
 
 ```bash
 cd frontend
-npm install
+npm install --ignore-scripts
 npm run lint
 npm run typecheck
 ```
@@ -52,13 +59,10 @@ bash scripts/build-wasm.sh
 
 ## Codex Collaboration
 
-This section should be expanded as the build progresses. It exists now so the final submission has a clear place to document how Codex and GPT-5.6 were used for:
+Codex and GPT-5.6 supported the project from architecture through release verification:
 
-- architecture and scope decisions
-- Rust workspace and testing setup
-- frontend scaffolding and integration
-- quality review, refactoring, and release prep
-
-## Git Note
-
-The current sandbox exposes a read-only `.git` path, so writable git metadata could not be initialized from inside this session. The project files are fully scaffolded, but git initialization may need to be completed outside the sandbox or with a separate writable git directory.
+- planned the Rust core, WASM wrapper, and Vercel-compatible browser execution model
+- implemented and iterated on handwriting extraction, glyph grammar, TTF assembly, and font metrics
+- diagnosed browser font loading and added regression tests for `cmap` compatibility and glyph topology
+- ran formatting, Clippy, Rust tests, frontend lint, and TypeScript checks as part of each release pass
+- converted feedback from real handwriting samples into shared generator improvements instead of hand-editing generated font files
