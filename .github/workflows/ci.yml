@@ -40,11 +40,87 @@ jobs:
       - name: Build WASM package
         working-directory: frontend
         run: npm run wasm:build
-      - name: Verify tracked WASM artifacts
-        run: git diff --exit-code -- frontend/public/wasm/inkform_wasm_bg.wasm frontend/src/lib/generated
+      - name: Verify Rust changes include refreshed WASM delivery artifacts
+        shell: bash
+        run: |
+          if git diff --quiet HEAD^ HEAD -- Cargo.lock crates/inkform-core crates/inkform-wasm; then
+            exit 0
+          fi
+
+          git diff --quiet HEAD^ HEAD -- frontend/public/wasm/inkform_wasm_bg.wasm frontend/src/lib/generated || exit 0
+          echo "Rust or WASM source changed without refreshing the committed browser delivery artifacts."
+          exit 1
       - name: Type-check frontend
         working-directory: frontend
         run: npm run typecheck
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+
+  native-font-validation:
+    name: Native font validation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Generate validation font
+        shell: bash
+        run: cargo run -p inkform-core --example write_validation_font -- "$RUNNER_TEMP/inkform-validation.ttf"
+      - name: Validate with FreeType
+        if: runner.os == 'Linux'
+        shell: bash
+        run: fc-scan "$RUNNER_TEMP/inkform-validation.ttf"
+      - name: Validate with CoreText
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          FONT_PATH: ${{ runner.temp }}/inkform-validation.ttf
+        run: |
+          swift -framework CoreText -framework Foundation - <<'SWIFT'
+          import CoreText
+          import Foundation
+
+          let path = ProcessInfo.processInfo.environment["FONT_PATH"] ?? ""
+          let url = URL(fileURLWithPath: path)
+          var registrationError: Unmanaged<CFError>?
+
+          guard CTFontManagerRegisterFontsForURL(url as CFURL, .process, &registrationError) else {
+              let message = registrationError?.takeRetainedValue().localizedDescription ?? "Unknown CoreText error"
+              fatalError("CoreText rejected generated font: \(message)")
+          }
+
+          guard CTFontManagerUnregisterFontsForURL(url as CFURL, .process, nil) else {
+              fatalError("CoreText could not unregister generated font")
+          }
+          SWIFT
+      - name: Validate with GDI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          FONT_PATH: ${{ runner.temp }}\inkform-validation.ttf
+        run: |
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+
+          public static class InkformFontValidator {
+              [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+              public static extern int AddFontResourceEx(string fileName, uint flags, IntPtr reserved);
+
+              [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+              public static extern bool RemoveFontResourceEx(string fileName, uint flags, IntPtr reserved);
+          }
+          '@
+
+          $flags = [uint32]0x10
+          $count = [InkformFontValidator]::AddFontResourceEx($env:FONT_PATH, $flags, [IntPtr]::Zero)
+          if ($count -lt 1) {
+              $lastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+              throw "GDI rejected generated font. Win32 error: $lastError"
+          }
+
+          [void][InkformFontValidator]::RemoveFontResourceEx($env:FONT_PATH, $flags, [IntPtr]::Zero)

@@ -100,6 +100,8 @@
   The frontend build consumes committed WASM delivery artifacts because Vercel's
   root-directory isolation prevents it from compiling the parent Rust workspace.
   CI rebuilds those artifacts and fails if they are stale.
+- CI validates a deterministic generated TTF with native platform parsers:
+  FreeType on Linux, CoreText on macOS, and GDI on Windows.
 - If the browser starts showing a generic placeholder preview again, first verify that the WASM bundle was rebuilt from current Rust sources
 - In restricted sandboxes, `wasm-pack` may fail because `wasm-bindgen` install/cache paths are not writable or network access is unavailable; a local machine run is the source of truth for browser-side validation
 - The current preview fallback path is `svg-v3`, tuned to visually match the generated TTF when a browser font load genuinely fails
