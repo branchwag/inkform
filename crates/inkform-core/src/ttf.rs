@@ -1,5 +1,5 @@
 use crate::domain::{GlyphCandidate, SampleImage, ScriptPack};
-use crate::extraction::{ExtractionResult, extract_handwriting_with_transcript};
+use crate::extraction::{ExtractedGlyph, ExtractionResult, extract_handwriting_with_transcript};
 use crate::glyph_grammar::{GlyphStyle, build_cursive_join_stroke, build_glyph_from_grammar};
 use image::{GrayImage, ImageReader, Luma};
 use std::collections::HashMap;
@@ -318,7 +318,11 @@ fn build_glyph_shapes(
         // glyphs that cannot appear in an arbitrary freeform upload.
         let style = glyph_style(style_profile, hinted_shape);
         let advance_width = glyph_advance_width(candidate, style);
-        let mut contours = build_glyph_from_grammar(candidate, style, seed)
+        let literal_contours = extraction_result.and_then(|result| {
+            literal_contours_for_character(result, candidate, style_profile, seed)
+        });
+        let mut contours = literal_contours
+            .or_else(|| build_glyph_from_grammar(candidate, style, seed))
             .filter(|contours| !contours.is_empty())
             .unwrap_or_else(|| algorithmic_contours(candidate, advance_width, seed, style_profile));
         if candidate.is_alphabetic()
@@ -342,6 +346,53 @@ fn build_glyph_shapes(
     }
 
     generated
+}
+
+fn literal_contours_for_character(
+    extraction: &ExtractionResult,
+    character: char,
+    style_profile: StyleProfile,
+    seed: u64,
+) -> Option<Vec<Vec<(i16, i16)>>> {
+    let glyph = extraction
+        .glyphs
+        .iter()
+        .find(|glyph| glyph.character == Some(character))?;
+    if !is_safe_literal_anchor(glyph) {
+        return None;
+    }
+
+    let contours = glyph
+        .outlines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, outline)| {
+            remix_outline_points(
+                outline,
+                character,
+                style_profile,
+                seed ^ u64::try_from(index).unwrap_or(0),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    (contours.len() == glyph.outlines.len()).then_some(contours)
+}
+
+fn is_safe_literal_anchor(glyph: &ExtractedGlyph) -> bool {
+    if glyph.outlines.is_empty() || glyph.outlines.len() > 4 {
+        return false;
+    }
+
+    // Photo-derived pixel boundaries with many turns are not usable font paths
+    // yet. Keep literal reuse conservative until centerline vectorization is in
+    // place, rather than exporting visibly distorted anchor letters.
+    glyph
+        .outlines
+        .iter()
+        .all(|outline| (4..=28).contains(&outline.len()))
+        && (0.08..=0.76).contains(&glyph.density)
+        && (0.12..=2.8).contains(&glyph.width_ratio)
 }
 
 fn cursive_join_attachment(contours: &[Vec<(i16, i16)>], style: GlyphStyle) -> Option<(i16, i16)> {
@@ -710,6 +761,16 @@ fn remix_shape_outline(
     style_profile: StyleProfile,
     seed: u64,
 ) -> Option<Vec<(i16, i16)>> {
+    remix_outline_points(&shape.outline, character, style_profile, seed)
+}
+
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+fn remix_outline_points(
+    outline: &[(i16, i16)],
+    character: char,
+    style_profile: StyleProfile,
+    seed: u64,
+) -> Option<Vec<(i16, i16)>> {
     let glyph_kind = classify_glyph(character);
     let target_width = f32::from(base_glyph_advance_width(character)) - 110.0;
     let width_scale = match glyph_kind {
@@ -733,8 +794,7 @@ fn remix_shape_outline(
     };
     let jitter_amount = style_profile.waviness * 0.24;
 
-    let transformed = shape
-        .outline
+    let transformed = outline
         .iter()
         .enumerate()
         .map(|(index, (x, y))| {
@@ -2066,7 +2126,7 @@ mod tests {
     use crate::extraction::{ExtractedGlyph, ExtractionResult};
 
     #[test]
-    fn transcript_anchor_guides_style_without_reusing_filled_contour() {
+    fn transcript_anchor_reuses_safe_literal_contours() {
         let outline = vec![
             (48, 38),
             (120, 710),
@@ -2093,6 +2153,7 @@ mod tests {
             glyphs: vec![ExtractedGlyph {
                 character: Some('a'),
                 outline: outline.clone(),
+                outlines: vec![outline.clone()],
                 width_ratio: measures.width_ratio,
                 height_ratio: measures.height_ratio,
                 slant: measures.slant,
@@ -2103,6 +2164,7 @@ mod tests {
             style_glyphs: vec![ExtractedGlyph {
                 character: None,
                 outline: outline.clone(),
+                outlines: vec![outline.clone()],
                 width_ratio: measures.width_ratio,
                 height_ratio: measures.height_ratio,
                 slant: measures.slant,
@@ -2129,7 +2191,7 @@ mod tests {
 
         assert_eq!(generated.len(), 1);
         let expected = expected.into_iter().collect::<Vec<_>>();
-        assert_ne!(generated[0].contours.first(), expected.first());
+        assert_eq!(generated[0].contours.first(), expected.first());
         assert!(generated[0].contours.len() >= expected.len());
     }
 }

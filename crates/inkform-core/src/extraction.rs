@@ -19,6 +19,7 @@ struct PositionedComponent {
 pub struct ExtractedGlyph {
     pub character: Option<char>,
     pub outline: Vec<(i16, i16)>,
+    pub outlines: Vec<Vec<(i16, i16)>>,
     pub width_ratio: f32,
     pub height_ratio: f32,
     pub slant: f32,
@@ -110,11 +111,13 @@ fn extracted_glyph_from_points(
     points: &[(usize, usize)],
     character: Option<char>,
 ) -> Option<ExtractedGlyph> {
-    let outline = normalize_outline_to_font(&trace_component_boundary(points)?)?;
+    let outlines = normalize_outlines_to_font(&trace_component_boundaries(points)?)?;
+    let outline = outlines.iter().max_by_key(|outline| outline.len())?.clone();
     let measures = measure_component(points)?;
     Some(ExtractedGlyph {
         character,
         outline,
+        outlines,
         width_ratio: measures.width_ratio,
         height_ratio: measures.height_ratio,
         slant: measures.slant,
@@ -540,7 +543,7 @@ const fn is_ink(pixel: Luma<u8>, ink_threshold: u8) -> bool {
     pixel.0[0] <= ink_threshold
 }
 
-fn trace_component_boundary(points: &[(usize, usize)]) -> Option<Vec<(usize, usize)>> {
+fn trace_component_boundaries(points: &[(usize, usize)]) -> Option<Vec<Vec<(usize, usize)>>> {
     type Point = (usize, usize);
 
     let ink = points.iter().copied().collect::<HashSet<_>>();
@@ -576,7 +579,7 @@ fn trace_component_boundary(points: &[(usize, usize)]) -> Option<Vec<(usize, usi
     }
 
     let mut used = vec![false; edges.len()];
-    let mut largest_loop = Vec::new();
+    let mut loops = Vec::new();
     for edge_index in 0..edges.len() {
         if used.get(edge_index).copied().unwrap_or(true) {
             continue;
@@ -603,12 +606,16 @@ fn trace_component_boundary(points: &[(usize, usize)]) -> Option<Vec<(usize, usi
             }
         }
 
-        if loop_points.len() > largest_loop.len() {
-            largest_loop = loop_points;
+        if let Some(simplified) = simplify_outline(&loop_points) {
+            loops.push(simplified);
         }
     }
 
-    simplify_outline(&largest_loop)
+    if loops.is_empty() {
+        return None;
+    }
+
+    Some(loops)
 }
 
 fn simplify_outline(points: &[(usize, usize)]) -> Option<Vec<(usize, usize)>> {
@@ -645,11 +652,11 @@ fn simplify_outline(points: &[(usize, usize)]) -> Option<Vec<(usize, usize)>> {
     clippy::cast_possible_truncation,
     clippy::similar_names
 )]
-fn normalize_outline_to_font(points: &[(usize, usize)]) -> Option<Vec<(i16, i16)>> {
-    let min_x = points.iter().map(|(x, _)| *x).min()?;
-    let max_x = points.iter().map(|(x, _)| *x).max()?;
-    let min_y = points.iter().map(|(_, y)| *y).min()?;
-    let max_y = points.iter().map(|(_, y)| *y).max()?;
+fn normalize_outlines_to_font(outlines: &[Vec<(usize, usize)>]) -> Option<Vec<Vec<(i16, i16)>>> {
+    let min_x = outlines.iter().flatten().map(|(x, _)| *x).min()?;
+    let max_x = outlines.iter().flatten().map(|(x, _)| *x).max()?;
+    let min_y = outlines.iter().flatten().map(|(_, y)| *y).min()?;
+    let max_y = outlines.iter().flatten().map(|(_, y)| *y).max()?;
     if max_x <= min_x || max_y <= min_y {
         return None;
     }
@@ -672,19 +679,29 @@ fn normalize_outline_to_font(points: &[(usize, usize)]) -> Option<Vec<(i16, i16)
     let horizontal_padding = ((target_width - resized_width) / 2).max(0);
     let baseline = resized_height.max(1);
 
-    let normalized = points
+    let normalized = outlines
         .iter()
-        .map(|(x, y)| {
-            let local_x = i32::try_from(x.saturating_sub(min_x)).unwrap_or(0);
-            let local_y = i32::try_from(y.saturating_sub(min_y)).unwrap_or(0);
-            let mapped_x = ((local_x as f32) * scale).round() as i32;
-            let mapped_y = ((local_y as f32) * scale).round() as i32;
-            (
-                clamp_i32_to_i16(horizontal_padding + mapped_x + 50),
-                clamp_i32_to_i16((baseline - mapped_y).max(0)),
-            )
+        .map(|outline| {
+            outline
+                .iter()
+                .map(|(x, y)| {
+                    let local_x = i32::try_from(x.saturating_sub(min_x)).unwrap_or(0);
+                    let local_y = i32::try_from(y.saturating_sub(min_y)).unwrap_or(0);
+                    let mapped_x = ((local_x as f32) * scale).round() as i32;
+                    let mapped_y = ((local_y as f32) * scale).round() as i32;
+                    (
+                        clamp_i32_to_i16(horizontal_padding + mapped_x + 50),
+                        clamp_i32_to_i16((baseline - mapped_y).max(0)),
+                    )
+                })
+                .collect::<Vec<_>>()
         })
+        .filter(|outline| outline.len() >= 4)
         .collect::<Vec<_>>();
+
+    if normalized.is_empty() {
+        return None;
+    }
 
     Some(normalized)
 }
