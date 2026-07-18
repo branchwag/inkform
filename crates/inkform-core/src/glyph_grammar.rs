@@ -81,7 +81,9 @@ pub fn build_cursive_join_stroke(
         ((start_x + advance) * 0.5, baseline + 16.0),
         (advance + 42.0, baseline + 12.0),
     ];
-    let thickness = (style.stroke_width * 0.3).max(11.0);
+    // Keep the connector visually continuous with the handwritten stroke. The
+    // trajectory stays short and attached, so this does not become an underline.
+    let thickness = (style.stroke_width * 0.68).max(16.0);
     render_open_stroke(&points, thickness, style.cursive_score)
         .into_iter()
         .next()
