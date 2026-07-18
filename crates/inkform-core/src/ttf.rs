@@ -51,7 +51,6 @@ struct StyleProfile {
 
 #[derive(Debug, Clone)]
 struct ExtractedShape {
-    character: Option<char>,
     measures: ComponentMeasures,
     #[allow(dead_code)]
     outline: Vec<(i16, i16)>,
@@ -271,7 +270,6 @@ fn build_glyph_shapes(
                 .glyphs
                 .iter()
                 .map(|glyph| ExtractedShape {
-                    character: glyph.character,
                     outline: glyph.outline.clone(),
                     measures: ComponentMeasures {
                         width_ratio: glyph.width_ratio,
@@ -294,7 +292,6 @@ fn build_glyph_shapes(
                 .style_glyphs
                 .iter()
                 .map(|glyph| ExtractedShape {
-                    character: None,
                     outline: Vec::new(),
                     measures: ComponentMeasures {
                         width_ratio: glyph.width_ratio,
@@ -309,10 +306,6 @@ fn build_glyph_shapes(
             derive_style_profile(decoded_sheet, &style_shapes)
         },
     );
-    let transcript_anchors = extracted_shapes
-        .iter()
-        .filter_map(|shape| shape.character.map(|character| (character, shape)))
-        .collect::<HashMap<_, _>>();
     let mut generated = Vec::with_capacity(glyphs.len());
 
     for (glyph_index, character) in script_pack.glyphs.iter().enumerate() {
@@ -325,19 +318,9 @@ fn build_glyph_shapes(
         // glyphs that cannot appear in an arbitrary freeform upload.
         let style = glyph_style(style_profile, hinted_shape);
         let advance_width = glyph_advance_width(candidate, style);
-        let mut contours = transcript_anchors
-            .get(&candidate)
-            .and_then(|shape| remix_shape_outline(shape, candidate, style_profile, seed))
-            .map_or_else(
-                || {
-                    build_glyph_from_grammar(candidate, style, seed)
-                        .filter(|contours| !contours.is_empty())
-                        .unwrap_or_else(|| {
-                            algorithmic_contours(candidate, advance_width, seed, style_profile)
-                        })
-                },
-                |outline| vec![outline],
-            );
+        let mut contours = build_glyph_from_grammar(candidate, style, seed)
+            .filter(|contours| !contours.is_empty())
+            .unwrap_or_else(|| algorithmic_contours(candidate, advance_width, seed, style_profile));
         if candidate.is_alphabetic()
             && let Some(terminal) = cursive_join_attachment(&contours, style)
             && let Some(join_stroke) = build_cursive_join_stroke(style, advance_width, terminal)
@@ -572,11 +555,7 @@ fn extract_shape_library(sheet: &GrayImage) -> Vec<ExtractedShape> {
         .filter_map(|component| {
             let measures = measure_component(component)?;
             let outline = build_shape_from_points(component)?;
-            Some(ExtractedShape {
-                character: None,
-                measures,
-                outline,
-            })
+            Some(ExtractedShape { measures, outline })
         })
         .collect::<Vec<_>>();
 
@@ -2087,7 +2066,7 @@ mod tests {
     use crate::extraction::{ExtractedGlyph, ExtractionResult};
 
     #[test]
-    fn transcript_anchor_uses_confirmed_handwriting_outline() {
+    fn transcript_anchor_guides_style_without_reusing_filled_contour() {
         let outline = vec![
             (48, 38),
             (120, 710),
@@ -2141,11 +2120,7 @@ mod tests {
             character: 'a',
             confidence_percent: 100,
         }];
-        let expected_shape = ExtractedShape {
-            character: Some('a'),
-            measures,
-            outline,
-        };
+        let expected_shape = ExtractedShape { measures, outline };
         let profile = derive_style_profile(None, std::slice::from_ref(&expected_shape));
         let seed = mix_seed(91, 'a');
         let expected = remix_shape_outline(&expected_shape, 'a', profile, seed);
@@ -2154,7 +2129,7 @@ mod tests {
 
         assert_eq!(generated.len(), 1);
         let expected = expected.into_iter().collect::<Vec<_>>();
-        assert_eq!(generated[0].contours.first(), expected.first());
-        assert!(generated[0].contours.len() > expected.len());
+        assert_ne!(generated[0].contours.first(), expected.first());
+        assert!(generated[0].contours.len() >= expected.len());
     }
 }

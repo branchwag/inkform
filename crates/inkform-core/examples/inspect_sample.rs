@@ -96,8 +96,8 @@ fn main() -> Result<(), String> {
     {
         for (index, glyph) in extraction.glyphs.iter().enumerate() {
             println!(
-                "anchor_component={index} character={:?} width_ratio={:.3}",
-                glyph.character, glyph.width_ratio
+                "anchor_component={index} character={:?} width_ratio={:.3} density={:.3}",
+                glyph.character, glyph.width_ratio, glyph.density
             );
         }
     }
