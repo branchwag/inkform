@@ -3,7 +3,7 @@
 ## Project Summary
 
 - Project name: `Inkform`
-- Goal: turn a guided handwriting sample into a usable downloadable font
+- Goal: turn a handwriting sample into a usable downloadable font
 - Product type: consumer creative tool for OpenAI Build Week
 - Track target: `Apps for Your Life`
 
@@ -13,7 +13,7 @@
 - Rust-first architecture with a shared core crate and a WASM-facing wrapper crate
 - Guaranteed v1 language coverage: Latin extended
 - Anonymous usage only in v1
-- Guided upload, local processing pipeline, preview, and export flow
+- Freeform handwriting upload, local processing pipeline, preview, and export flow
 
 ## Non-Goals
 
@@ -29,6 +29,7 @@
 - Treat the frontend as a product shell over the Rust engine
 - Favor local browser processing to avoid Vercel Hobby backend limits
 - Keep script coverage data-driven so new script packs can be added later
+- Do not require a guided handwriting sheet in the primary product flow
 
 ## Rust Coding Constraints
 
@@ -72,7 +73,7 @@
 
 ## Active Next Steps
 
-- Flesh out the handwriting sheet format and upload flow
+- Improve freeform handwriting extraction from arbitrary photos
 - Replace placeholder font generation artifacts with real vector/font assembly
 - Integrate the Rust wrapper with a compiled WASM delivery path
 - Add real image decoding and font export behavior beyond the current placeholder artifact

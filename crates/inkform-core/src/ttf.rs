@@ -175,8 +175,10 @@ fn build_glyph_definitions(
             .get(glyph_index)
             .map_or(*character, |glyph| glyph.character);
         let seed = mix_seed(base_seed, *character);
-        let extracted_glyph =
-            decoded_sheet.and_then(|sheet| extract_grid_glyph(sheet, glyph_index));
+        let extracted_glyph = decoded_sheet.and_then(|sheet| {
+            extract_grid_glyph(sheet, glyph_index)
+                .or_else(|| extract_freeform_glyph(sheet, glyph_index, script_pack.glyph_count()))
+        });
         definitions.push(extracted_glyph.map_or_else(
             || build_algorithmic_glyph(candidate, seed),
             |points| build_simple_polygon_glyph(glyph_advance_width(candidate), 32, &points),
@@ -339,6 +341,87 @@ fn extract_grid_glyph(sheet: &GrayImage, glyph_index: usize) -> Option<Vec<(i16,
     bottom_points.reverse();
     top_points.extend(bottom_points);
 
+    Some(top_points)
+}
+
+fn extract_freeform_glyph(
+    sheet: &GrayImage,
+    glyph_index: usize,
+    glyph_count: usize,
+) -> Option<Vec<(i16, i16)>> {
+    let sheet_width = usize::try_from(sheet.width()).ok()?;
+    let sheet_height = usize::try_from(sheet.height()).ok()?;
+    if sheet_width < 16 || sheet_height < 16 {
+        return None;
+    }
+
+    let mut ink_points = Vec::new();
+    for y in 0..sheet_height {
+        for x in 0..sheet_width {
+            if is_ink(*sheet.get_pixel(u32::try_from(x).ok()?, u32::try_from(y).ok()?)) {
+                ink_points.push((x, y));
+            }
+        }
+    }
+
+    if ink_points.len() < 48 {
+        return None;
+    }
+
+    let min_x = ink_points.iter().map(|(x, _)| *x).min()?;
+    let max_x = ink_points.iter().map(|(x, _)| *x).max()?;
+    let min_y = ink_points.iter().map(|(_, y)| *y).min()?;
+    let max_y = ink_points.iter().map(|(_, y)| *y).max()?;
+    if max_x <= min_x || max_y <= min_y {
+        return None;
+    }
+
+    let width_span = max_x - min_x + 1;
+    let height_span = max_y - min_y + 1;
+    let baseline_y = max_y;
+    let sample_columns = 18_usize;
+    let glyph_bucket = (glyph_index * sample_columns) / glyph_count.max(1);
+    let phase_shift = glyph_bucket % 5;
+
+    let mut top_points = Vec::new();
+    let mut bottom_points = Vec::new();
+
+    for sample_index in 0..sample_columns {
+        let shifted_index = (sample_index + phase_shift) % sample_columns;
+        let local_x = min_x + ((shifted_index * width_span) / sample_columns).min(width_span - 1);
+        let column_range_end = (local_x + (width_span / sample_columns).max(1)).min(max_x + 1);
+
+        let mut top_hit: Option<usize> = None;
+        let mut bottom_hit: Option<usize> = None;
+
+        for x in local_x..column_range_end {
+            for y in min_y..=max_y {
+                if is_ink(*sheet.get_pixel(u32::try_from(x).ok()?, u32::try_from(y).ok()?)) {
+                    top_hit = Some(top_hit.map_or(y, |current| current.min(y)));
+                    bottom_hit = Some(bottom_hit.map_or(y, |current| current.max(y)));
+                }
+            }
+        }
+
+        let Some(top_y) = top_hit else {
+            continue;
+        };
+        let bottom_y = bottom_hit.unwrap_or(top_y);
+
+        let normalized_x = scale_to_units(local_x - min_x, width_span, 520) + 50;
+        let normalized_top = scale_y_to_units(baseline_y.saturating_sub(top_y), height_span);
+        let normalized_bottom = scale_y_to_units(baseline_y.saturating_sub(bottom_y), height_span);
+
+        top_points.push((normalized_x, normalized_top));
+        bottom_points.push((normalized_x, normalized_bottom.max(0)));
+    }
+
+    if top_points.len() < 4 {
+        return None;
+    }
+
+    bottom_points.reverse();
+    top_points.extend(bottom_points);
     Some(top_points)
 }
 

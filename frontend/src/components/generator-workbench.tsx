@@ -139,13 +139,13 @@ export function GeneratorWorkbench() {
           Upload your handwriting and preview what it could become.
         </h2>
         <p style={{ color: "var(--muted)", lineHeight: 1.7, margin: 0 }}>
-          Start with a clean photo or scan of your handwriting sheet. Inkform checks the sample,
-          builds a matching character set, and prepares a downloadable result.
+          Start with any clear photo or scan of your handwriting. Inkform checks the sample,
+          pulls out stroke information, and prepares a downloadable result.
         </p>
       </div>
 
       <label style={{ display: "grid", gap: "0.5rem" }}>
-        <span>Upload your handwriting sheet</span>
+        <span>Upload a handwriting photo</span>
         <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileChange} />
       </label>
 

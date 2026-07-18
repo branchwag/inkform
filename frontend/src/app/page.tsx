@@ -1,14 +1,13 @@
 import { StatusCard } from "../components/status-card";
 import { GeneratorWorkbench } from "../components/generator-workbench";
-
 const steps = [
   {
     title: "Write naturally",
-    body: "Download a sheet, fill it in by hand, and snap a clear photo or scan."
+    body: "Use any clear sample of your handwriting, whether it is a note, a label, or a dedicated practice page."
   },
   {
     title: "Build your character set",
-    body: "Inkform organizes your sample into a consistent set of letters, numbers, and punctuation."
+    body: "Inkform studies the strokes in your upload and turns them into a reusable digital letter style."
   },
   {
     title: "Preview and save",
@@ -65,7 +64,7 @@ export default function HomePage() {
             }}
           >
             Upload a handwriting sheet, preview your words, and save the result in one simple flow.
-            Inkform is built to make personal handwriting feel ready for digital use.
+            Inkform is built to make personal handwriting feel ready for digital use from any clear photo you already have.
           </p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem", marginTop: "1.5rem" }}>
             <a
