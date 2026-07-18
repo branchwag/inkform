@@ -45,9 +45,13 @@
 - Centerline extraction uses bounded Zhang-Suen thinning on an adaptive-resolution bitmap. Reuse
   only one- or two-trajectory anchors with bounded complexity; connected cursive photos that split
   into many branches must inform style synthesis rather than be replayed as illegible glyphs
-- For strongly cursive samples, generated alphabetic glyphs include a thin exit stroke that
-  overlaps the following glyph and use tighter side bearings. Keep it as one shared contextual
-  connection strategy, not a full baseline underline or disconnected decorative ligatures
+- For strongly cursive samples, only glyphs with naturally open terminals receive a thin exit
+  stroke that overlaps the following glyph; closed bowls and counters prioritize legibility over
+  a synthetic connector. Keep this as one shared contextual connection strategy, not a full
+  baseline underline or disconnected decorative ligatures
+- Literal transcript anchors must pass centerline continuity and character-topology checks before
+  replay. Closed counters, dotted letters, crossed letters, and multi-stroke letters otherwise
+  fall back to the legible grammar while retaining the upload's global style
 - A real `Hello!` sample can produce overlapping connected-stroke regions plus separate
   punctuation strokes. Preserve the transcript-aligned segmentation confidence checks; never map
   raw components monotonically to characters

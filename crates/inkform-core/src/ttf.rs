@@ -327,7 +327,7 @@ fn build_glyph_shapes(
             .or_else(|| build_glyph_from_grammar(candidate, style, seed))
             .filter(|contours| !contours.is_empty())
             .unwrap_or_else(|| algorithmic_contours(candidate, advance_width, seed, style_profile));
-        if candidate.is_alphabetic()
+        if supports_cursive_join(candidate)
             && let Some(terminal) = cursive_join_attachment(&contours, style)
             && let Some(join_stroke) = build_cursive_join_stroke(style, advance_width, terminal)
         {
@@ -360,7 +360,7 @@ fn literal_contours_for_character(
         .glyphs
         .iter()
         .filter(|glyph| glyph.character == Some(character))
-        .filter(|glyph| is_safe_literal_anchor(glyph))
+        .filter(|glyph| is_safe_literal_anchor(glyph, character))
         .min_by_key(|glyph| centerline_complexity(glyph))?;
 
     let contours = glyph
@@ -387,7 +387,7 @@ fn literal_contours_for_character(
     (!contours.is_empty()).then_some(contours)
 }
 
-fn is_safe_literal_anchor(glyph: &ExtractedGlyph) -> bool {
+fn is_safe_literal_anchor(glyph: &ExtractedGlyph, character: char) -> bool {
     if glyph.centerlines.is_empty() || glyph.centerlines.len() > 2 {
         return false;
     }
@@ -401,6 +401,141 @@ fn is_safe_literal_anchor(glyph: &ExtractedGlyph) -> bool {
         && centerline_complexity(glyph) <= 112
         && (0.08..=0.76).contains(&glyph.density)
         && (0.12..=2.8).contains(&glyph.width_ratio)
+        && has_continuous_centerlines(glyph)
+        && matches_literal_topology(glyph, character)
+}
+
+#[derive(Clone, Copy)]
+enum LiteralTopology {
+    OpenStroke,
+    ClosedCounter,
+    SeparateDot,
+    CrossStroke,
+    MultipleStrokes,
+}
+
+fn matches_literal_topology(glyph: &ExtractedGlyph, character: char) -> bool {
+    match literal_topology_for(character) {
+        LiteralTopology::OpenStroke => true,
+        LiteralTopology::ClosedCounter => has_closed_centerline(glyph),
+        LiteralTopology::SeparateDot => has_detached_dot(glyph),
+        LiteralTopology::CrossStroke | LiteralTopology::MultipleStrokes => {
+            glyph.centerlines.len() >= 2
+        }
+    }
+}
+
+const fn literal_topology_for(character: char) -> LiteralTopology {
+    match character {
+        // These letters need a closed bowl or counter. Replaying an open slice
+        // from a connected word turns them into illegible hooks or scribbles.
+        'a' | 'A' | 'b' | 'B' | 'd' | 'D' | 'g' | 'G' | 'o' | 'O' | 'p' | 'P' | 'q' | 'Q' | 'R'
+        | 'å' | 'Å' | 'ä' | 'Ä' | 'æ' | 'Æ' | 'ö' | 'Ö' => LiteralTopology::ClosedCounter,
+        // A missing detached dot changes the letter's identity entirely.
+        'i' | 'I' | 'j' | 'J' | 'ì' | 'í' | 'î' | 'ï' => LiteralTopology::SeparateDot,
+        // These require a second crossing stroke to remain recognizable.
+        'f' | 'F' | 't' | 'T' => LiteralTopology::CrossStroke,
+        // These are not safely represented by a single extracted trajectory.
+        'k' | 'K' | 'x' | 'X' | 'y' | 'Y' | 'z' | 'Z' => LiteralTopology::MultipleStrokes,
+        _ => LiteralTopology::OpenStroke,
+    }
+}
+
+const fn supports_cursive_join(character: char) -> bool {
+    // Only add a synthetic connector where the grammar already ends with an
+    // open terminal. A detached tail on a closed bowl makes `o`, `a`, `d`, and
+    // similar letters read as a different character.
+    matches!(
+        character,
+        'c' | 'e' | 'h' | 'i' | 'l' | 'm' | 'n' | 'r' | 's' | 't' | 'u' | 'v' | 'w' | 'x' | 'z'
+    )
+}
+
+fn has_continuous_centerlines(glyph: &ExtractedGlyph) -> bool {
+    glyph.centerlines.iter().all(|path| {
+        let min_x = path.iter().map(|(x, _)| *x).min().map_or(0, |value| value);
+        let max_x = path.iter().map(|(x, _)| *x).max().map_or(0, |value| value);
+        let min_y = path.iter().map(|(_, y)| *y).min().map_or(0, |value| value);
+        let max_y = path.iter().map(|(_, y)| *y).max().map_or(0, |value| value);
+        let span = (i32::from(max_x) - i32::from(min_x))
+            .max(i32::from(max_y) - i32::from(min_y))
+            .max(1);
+        let maximum_step_squared = (span * span) / 2;
+
+        path.windows(2).all(|points| {
+            let delta_x = i32::from(points[1].0) - i32::from(points[0].0);
+            let delta_y = i32::from(points[1].1) - i32::from(points[0].1);
+            delta_x * delta_x + delta_y * delta_y <= maximum_step_squared
+        })
+    })
+}
+
+fn has_closed_centerline(glyph: &ExtractedGlyph) -> bool {
+    glyph.centerlines.iter().any(|path| {
+        let Some(&(start_x, start_y)) = path.first() else {
+            return false;
+        };
+        let Some(&(end_x, end_y)) = path.last() else {
+            return false;
+        };
+        let min_x = path
+            .iter()
+            .map(|(x, _)| *x)
+            .min()
+            .map_or(start_x, |value| value);
+        let max_x = path
+            .iter()
+            .map(|(x, _)| *x)
+            .max()
+            .map_or(start_x, |value| value);
+        let min_y = path
+            .iter()
+            .map(|(_, y)| *y)
+            .min()
+            .map_or(start_y, |value| value);
+        let max_y = path
+            .iter()
+            .map(|(_, y)| *y)
+            .max()
+            .map_or(start_y, |value| value);
+        let span = (i32::from(max_x) - i32::from(min_x))
+            .max(i32::from(max_y) - i32::from(min_y))
+            .max(1);
+        let delta_x = i32::from(end_x) - i32::from(start_x);
+        let delta_y = i32::from(end_y) - i32::from(start_y);
+
+        // A loop's endpoints should converge within a small fraction of its
+        // own size. A joined cursive slice generally has distant endpoints.
+        delta_x * delta_x + delta_y * delta_y <= (span * span) / 9
+    })
+}
+
+fn has_detached_dot(glyph: &ExtractedGlyph) -> bool {
+    if glyph.centerlines.len() != 2 {
+        return false;
+    }
+
+    let Some((small, main)) = glyph
+        .centerlines
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, path)| path.len())
+    else {
+        return false;
+    };
+    let Some(other) = glyph.centerlines.get(usize::from(small == 0)) else {
+        return false;
+    };
+
+    let small_height = centerline_height(main);
+    let main_height = centerline_height(other);
+    small_height > 0 && small_height * 3 <= main_height
+}
+
+fn centerline_height(path: &[(i16, i16)]) -> i32 {
+    let min_y = path.iter().map(|(_, y)| *y).min().map_or(0, |value| value);
+    let max_y = path.iter().map(|(_, y)| *y).max().map_or(0, |value| value);
+    i32::from(max_y) - i32::from(min_y)
 }
 
 fn centerline_complexity(glyph: &ExtractedGlyph) -> usize {
@@ -2152,8 +2287,9 @@ fn clamp_i32_to_i16(value: i32) -> i16 {
 mod tests {
     use super::{
         ComponentMeasures, ExtractedShape, build_glyph_shapes, build_maxp_table,
-        build_ttf_from_definitions, derive_style_profile, format4_search_params, mix_seed,
-        notdef_glyph, remix_shape_outline, table_checksum,
+        build_ttf_from_definitions, derive_style_profile, format4_search_params,
+        is_safe_literal_anchor, mix_seed, notdef_glyph, remix_shape_outline, supports_cursive_join,
+        table_checksum,
     };
     use crate::domain::{GlyphCandidate, ScriptPack};
     use crate::extraction::{ExtractedGlyph, ExtractionResult};
@@ -2281,5 +2417,104 @@ mod tests {
         assert_eq!(params.search_range, 256);
         assert_eq!(params.entry_selector, 7);
         assert_eq!(params.range_shift, 40);
+    }
+
+    #[test]
+    fn rejects_an_open_o_centerline_as_a_literal_anchor() {
+        let glyph = ExtractedGlyph {
+            character: Some('o'),
+            outline: vec![(0, 0), (400, 0), (400, 360), (0, 360)],
+            outlines: vec![vec![(0, 0), (400, 0), (400, 360), (0, 360)]],
+            centerlines: vec![vec![
+                (10, 180),
+                (75, 275),
+                (180, 335),
+                (300, 300),
+                (390, 150),
+            ]],
+            width_ratio: 0.8,
+            height_ratio: 0.8,
+            slant: 0.1,
+            density: 0.3,
+            baseline_offset: 0.0,
+            ink_area: 0.03,
+        };
+
+        assert!(!is_safe_literal_anchor(&glyph, 'o'));
+        assert!(is_safe_literal_anchor(&glyph, 'c'));
+    }
+
+    #[test]
+    fn accepts_a_closed_o_centerline_as_a_literal_anchor() {
+        let glyph = ExtractedGlyph {
+            character: Some('o'),
+            outline: vec![(0, 0), (400, 0), (400, 360), (0, 360)],
+            outlines: vec![vec![(0, 0), (400, 0), (400, 360), (0, 360)]],
+            centerlines: vec![vec![
+                (200, 20),
+                (380, 180),
+                (200, 340),
+                (25, 180),
+                (205, 25),
+            ]],
+            width_ratio: 0.8,
+            height_ratio: 0.8,
+            slant: 0.1,
+            density: 0.3,
+            baseline_offset: 0.0,
+            ink_area: 0.03,
+        };
+
+        assert!(is_safe_literal_anchor(&glyph, 'o'));
+    }
+
+    #[test]
+    fn requires_essential_letter_topology_before_replaying_an_anchor() {
+        let one_stroke = ExtractedGlyph {
+            character: Some('i'),
+            outline: vec![(0, 0), (400, 0), (400, 360), (0, 360)],
+            outlines: vec![vec![(0, 0), (400, 0), (400, 360), (0, 360)]],
+            centerlines: vec![vec![
+                (200, 0),
+                (200, 100),
+                (200, 220),
+                (200, 360),
+                (200, 440),
+            ]],
+            width_ratio: 0.8,
+            height_ratio: 0.8,
+            slant: 0.1,
+            density: 0.3,
+            baseline_offset: 0.0,
+            ink_area: 0.03,
+        };
+        let dotted = ExtractedGlyph {
+            centerlines: vec![
+                vec![(200, 0), (200, 30), (200, 55), (200, 75), (200, 90)],
+                vec![(200, 150), (200, 260), (200, 380), (200, 500), (200, 620)],
+            ],
+            ..one_stroke.clone()
+        };
+        let crossed = ExtractedGlyph {
+            centerlines: vec![
+                vec![(200, 0), (200, 180), (200, 360), (200, 540), (200, 700)],
+                vec![(50, 330), (120, 330), (200, 330), (280, 330), (350, 330)],
+            ],
+            ..one_stroke.clone()
+        };
+
+        assert!(!is_safe_literal_anchor(&one_stroke, 'i'));
+        assert!(!is_safe_literal_anchor(&one_stroke, 't'));
+        assert!(is_safe_literal_anchor(&dotted, 'i'));
+        assert!(is_safe_literal_anchor(&crossed, 't'));
+    }
+
+    #[test]
+    fn adds_synthetic_cursive_joins_only_to_open_letter_shapes() {
+        assert!(!supports_cursive_join('a'));
+        assert!(!supports_cursive_join('o'));
+        assert!(!supports_cursive_join('q'));
+        assert!(supports_cursive_join('n'));
+        assert!(supports_cursive_join('r'));
     }
 }
