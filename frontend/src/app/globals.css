@@ -44,8 +44,8 @@
 
 @font-face {
   font-family: "Inkform Sample";
-  src: url("/fonts/inkform-sample.woff2?v=4") format("woff2"),
-    url("/fonts/inkform-sample.ttf?v=4") format("truetype");
+  src: url("/fonts/inkform-sample.woff2?v=5") format("woff2"),
+    url("/fonts/inkform-sample.ttf?v=5") format("truetype");
   font-display: swap;
 }
 
