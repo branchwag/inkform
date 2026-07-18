@@ -2,7 +2,7 @@ import { generateDemoResult } from "./demo-engine";
 import type { GenerationResult } from "./engine-types";
 
 type WasmModule = {
-  default: (options?: { module_or_path?: string | URL }) => Promise<unknown>;
+  default: (options?: { module_or_path?: string | URL | Request | Promise<Response> }) => Promise<unknown>;
   generate_font_json: (
     bytes: Uint8Array,
     width: number,
@@ -37,7 +37,11 @@ export async function generateInkformResult(
         engineMode: "wasm",
         result: parseGenerationResult(payload)
       };
-    } catch {
+    } catch (error) {
+      if (process.env.NODE_ENV === "development") {
+        console.error("Inkform WASM generation failed; using fallback preview.", error);
+      }
+
       return {
         engineMode: "fallback",
         result: generateDemoResult(file, previewText)
@@ -59,9 +63,15 @@ async function loadWasmModule(): Promise<WasmModule | null> {
   try {
     const dynamicImport = (specifier: string) => import(/* webpackIgnore: true */ specifier);
     const wasmExports = (await dynamicImport("/wasm/inkform_wasm.js")) as unknown as WasmModule;
-    await wasmExports.default({ module_or_path: "/wasm/inkform_wasm_bg.wasm" });
+    await wasmExports.default({
+      module_or_path: "/wasm/inkform_wasm_bg.wasm"
+    });
     return wasmExports;
-  } catch {
+  } catch (error) {
+    if (process.env.NODE_ENV === "development") {
+      console.error("Inkform WASM load failed; using fallback preview.", error);
+    }
+
     return null;
   }
 }

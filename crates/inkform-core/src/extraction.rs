@@ -1,6 +1,5 @@
 use crate::domain::SampleImage;
 use image::{GrayImage, ImageReader, Luma};
-use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 
 #[derive(Debug, Clone)]
@@ -44,7 +43,7 @@ pub fn extract_handwriting(sample_image: &SampleImage) -> Option<ExtractionResul
                 continue;
             }
 
-            let outline = normalize_outline_to_font(&trace_component_outline(&points)?)?;
+            let outline = normalize_outline_to_font(&sample_component_outline(&points)?)?;
             let measures = measure_component(&points)?;
             glyphs.push(ExtractedGlyph {
                 outline,
@@ -373,144 +372,54 @@ const fn is_ink(pixel: Luma<u8>, ink_threshold: u8) -> bool {
     pixel.0[0] <= ink_threshold
 }
 
-fn trace_component_outline(points: &[(usize, usize)]) -> Option<Vec<(usize, usize)>> {
-    type Vertex = (usize, usize);
-    type Edge = (Vertex, Vertex);
-
-    let occupied = points.iter().copied().collect::<HashSet<_>>();
-    if occupied.is_empty() {
+fn sample_component_outline(points: &[(usize, usize)]) -> Option<Vec<(usize, usize)>> {
+    let min_x = points.iter().map(|(x, _)| *x).min()?;
+    let max_x = points.iter().map(|(x, _)| *x).max()?;
+    let min_y = points.iter().map(|(_, y)| *y).min()?;
+    let max_y = points.iter().map(|(_, y)| *y).max()?;
+    if max_x <= min_x || max_y <= min_y {
         return None;
     }
 
-    let mut boundary_edges = HashSet::<Edge>::new();
-    for &(x, y) in &occupied {
-        let edges = [
-            ((x, y), (x + 1, y)),
-            ((x + 1, y), (x + 1, y + 1)),
-            ((x, y + 1), (x + 1, y + 1)),
-            ((x, y), (x, y + 1)),
-        ];
+    let sample_columns = 24_usize;
+    let width_span = (max_x - min_x + 1).max(sample_columns);
+    let mut top_points = Vec::new();
+    let mut bottom_points = Vec::new();
 
-        for edge in edges {
-            let canonical = canonical_edge(edge);
-            if !boundary_edges.insert(canonical) {
-                boundary_edges.remove(&canonical);
+    for sample_index in 0..sample_columns {
+        let local_x = min_x + ((sample_index * width_span) / sample_columns).min(width_span - 1);
+        let column_range_end = (local_x + (width_span / sample_columns).max(1)).min(max_x + 1);
+
+        let mut top_hit: Option<usize> = None;
+        let mut bottom_hit: Option<usize> = None;
+
+        for x in local_x..column_range_end {
+            for &(point_x, point_y) in points {
+                if point_x != x {
+                    continue;
+                }
+
+                top_hit = Some(top_hit.map_or(point_y, |current| current.min(point_y)));
+                bottom_hit = Some(bottom_hit.map_or(point_y, |current| current.max(point_y)));
             }
         }
-    }
 
-    if boundary_edges.is_empty() {
-        return None;
-    }
-
-    let mut adjacency = HashMap::<Vertex, Vec<Vertex>>::new();
-    for &(start, end) in &boundary_edges {
-        adjacency.entry(start).or_default().push(end);
-        adjacency.entry(end).or_default().push(start);
-    }
-
-    let start = adjacency.keys().min().copied()?;
-    let mut outline = Vec::new();
-    let mut current = start;
-    let mut previous: Option<Vertex> = None;
-    loop {
-        outline.push(current);
-        let neighbors = adjacency.get(&current)?;
-        let next = if neighbors.len() == 1 {
-            neighbors[0]
-        } else {
-            choose_next_vertex(current, previous, neighbors)?
+        let Some(top_y) = top_hit else {
+            continue;
         };
+        let bottom_y = bottom_hit.unwrap_or(top_y);
 
-        previous = Some(current);
-        current = next;
-
-        if current == start {
-            break;
-        }
-
-        if outline.len() > boundary_edges.len().saturating_mul(2) {
-            return None;
-        }
+        top_points.push((local_x, top_y));
+        bottom_points.push((local_x, bottom_y));
     }
 
-    let simplified = remove_collinear_points(&outline);
-    if simplified.len() < 4 {
+    if top_points.len() < 4 {
         return None;
     }
 
-    Some(resample_outline(&simplified, 160))
-}
-
-fn canonical_edge(edge: ((usize, usize), (usize, usize))) -> ((usize, usize), (usize, usize)) {
-    if edge.0 <= edge.1 {
-        edge
-    } else {
-        (edge.1, edge.0)
-    }
-}
-
-fn choose_next_vertex(
-    current: (usize, usize),
-    previous: Option<(usize, usize)>,
-    neighbors: &[(usize, usize)],
-) -> Option<(usize, usize)> {
-    if previous.is_none() {
-        return neighbors.iter().copied().min_by_key(|neighbor| {
-            let dx = neighbor.0.abs_diff(current.0);
-            let dy = neighbor.1.abs_diff(current.1);
-            (dy, dx, *neighbor)
-        });
-    }
-
-    let previous = previous?;
-    neighbors
-        .iter()
-        .copied()
-        .filter(|neighbor| *neighbor != previous)
-        .min_by_key(|neighbor| {
-            let dx = neighbor.0.abs_diff(current.0);
-            let dy = neighbor.1.abs_diff(current.1);
-            (dy, dx, *neighbor)
-        })
-        .or(Some(previous))
-}
-
-fn remove_collinear_points(points: &[(usize, usize)]) -> Vec<(usize, usize)> {
-    if points.len() < 3 {
-        return points.to_vec();
-    }
-
-    let mut simplified = Vec::with_capacity(points.len());
-    for index in 0..points.len() {
-        let previous = points[(index + points.len() - 1) % points.len()];
-        let current = points[index];
-        let next = points[(index + 1) % points.len()];
-
-        let delta_prev_x =
-            i64::try_from(current.0).unwrap_or(0) - i64::try_from(previous.0).unwrap_or(0);
-        let delta_prev_y =
-            i64::try_from(current.1).unwrap_or(0) - i64::try_from(previous.1).unwrap_or(0);
-        let delta_next_x =
-            i64::try_from(next.0).unwrap_or(0) - i64::try_from(current.0).unwrap_or(0);
-        let delta_next_y =
-            i64::try_from(next.1).unwrap_or(0) - i64::try_from(current.1).unwrap_or(0);
-
-        if delta_prev_x * delta_next_y != delta_prev_y * delta_next_x {
-            simplified.push(current);
-        }
-    }
-
-    simplified
-}
-
-fn resample_outline(points: &[(usize, usize)], max_points: usize) -> Vec<(usize, usize)> {
-    if points.len() <= max_points {
-        return points.to_vec();
-    }
-
-    let stride = points.len().div_ceil(max_points);
-    points.iter().step_by(stride).copied().collect()
+    bottom_points.reverse();
+    top_points.extend(bottom_points);
+    Some(top_points)
 }
 
 #[allow(

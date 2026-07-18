@@ -61,6 +61,8 @@ pub struct PreviewRequest {
 pub struct PreviewResponse {
     pub render_plan: String,
     pub unsupported_characters: Vec<char>,
+    pub preview_version: String,
+    pub svg_markup: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

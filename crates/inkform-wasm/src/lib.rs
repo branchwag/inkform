@@ -1,6 +1,7 @@
 use inkform_core::{
     FontArtifact, InkformError, InkformErrorKind, PreviewRequest, PreviewResponse, SampleImage,
-    SampleQuality, ScriptPack, ValidationReport, generate_font, preview_text, validate_sample,
+    PREVIEW_VERSION, SampleQuality, ScriptPack, ValidationReport, build_preview_svg,
+    generate_font, preview_text, validate_sample,
 };
 use wasm_bindgen::prelude::*;
 
@@ -36,6 +37,10 @@ pub fn generate_font_json(
         generate_font(&sample, &script_pack).map_err(|error| map_to_js_error(&error))?;
     let preview_response = preview_generated_text(&font_artifact, preview_text)
         .map_err(|error| map_to_js_error(&error))?;
+    let preview_response = PreviewResponse {
+        svg_markup: build_preview_svg(&sample, &script_pack, &font_artifact.glyphs, preview_text),
+        ..preview_response
+    };
 
     Ok(build_generation_payload(
         &validation_report,
@@ -145,6 +150,7 @@ fn build_generation_payload(
         .map(u8::to_string)
         .collect::<Vec<_>>()
         .join(",");
+    let binary_hash = simple_binary_hash(&font_artifact.binary);
 
     format!(
         concat!(
@@ -159,13 +165,16 @@ fn build_generation_payload(
             "\"scriptPackId\":\"{}\",",
             "\"glyphCount\":{},",
             "\"binaryLabel\":\"{}\",",
+            "\"binaryHash\":\"{}\",",
             "\"downloadName\":\"{}\",",
             "\"mimeType\":\"{}\",",
             "\"bytes\":[{}]",
             "}},",
             "\"preview\":{{",
             "\"renderPlan\":\"{}\",",
-            "\"unsupportedCharacters\":[{}]",
+            "\"unsupportedCharacters\":[{}],",
+            "\"previewVersion\":\"{}\",",
+            "\"svgMarkup\":\"{}\"",
             "}}",
             "}}"
         ),
@@ -176,11 +185,14 @@ fn build_generation_payload(
         escape_json(&font_artifact.script_pack_id),
         font_artifact.glyphs.len(),
         escape_json("inkform-wasm-artifact"),
+        escape_json(&binary_hash),
         escape_json("inkform-preview.ttf"),
         escape_json("font/ttf"),
         binary_bytes,
         escape_json(&preview_response.render_plan),
-        unsupported_characters
+        unsupported_characters,
+        escape_json(PREVIEW_VERSION),
+        escape_json(&preview_response.svg_markup)
     )
 }
 
@@ -197,6 +209,18 @@ fn escape_json(value: &str) -> String {
 
         escaped
     })
+}
+
+fn simple_binary_hash(bytes: &[u8]) -> String {
+    let hash = bytes
+        .iter()
+        .enumerate()
+        .fold(0_u64, |accumulator, (index, byte)| {
+            let rotated = accumulator.rotate_left(5);
+            let index_value = u64::try_from(index).unwrap_or(0);
+            rotated ^ u64::from(*byte) ^ index_value.wrapping_mul(0x9E37_79B9)
+        });
+    format!("{hash:016x}")
 }
 
 #[cfg(test)]

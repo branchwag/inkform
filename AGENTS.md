@@ -47,6 +47,13 @@
 - Keep the runtime model compatible with browser execution
 - Avoid designs that depend on long-running Vercel functions
 
+## Frontend Workflow Notes
+
+- `frontend` `npm run dev` now routes through `scripts/dev-frontend.sh`, which rebuilds WASM, tries to stop a stale repo-local Next dev server on port `3000`, and then starts a clean server on `3000`
+- `frontend` runs `npm run wasm:build` automatically before `npm run build`
+- If the browser starts showing a generic placeholder preview again, first verify that the WASM bundle was rebuilt from current Rust sources
+- In restricted sandboxes, `wasm-pack` may fail because `wasm-bindgen` install/cache paths are not writable or network access is unavailable; a local machine run is the source of truth for browser-side validation
+
 ## Dependency Safety Rules
 
 - Do not install new npm packages blindly

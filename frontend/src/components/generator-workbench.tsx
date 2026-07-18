@@ -1,10 +1,12 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { generateInkformResult, type EngineMode } from "../lib/inkform-engine";
 import type { GenerationResult } from "../lib/engine-types";
 
 const starterText = "The quick brown fox jumps over the lazy dog.";
+const currentPreviewVersion = "svg-v2";
 
 export function GeneratorWorkbench() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -14,6 +16,7 @@ export function GeneratorWorkbench() {
   const [engineMode, setEngineMode] = useState<EngineMode | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [previewFontFamily, setPreviewFontFamily] = useState<string | null>(null);
+  const [previewFontState, setPreviewFontState] = useState<"idle" | "loaded" | "failed">("idle");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedSummary = useMemo(() => {
@@ -23,6 +26,17 @@ export function GeneratorWorkbench() {
 
     return `${selectedFile.name} · ${Math.ceil(selectedFile.size / 1024)} KB · ${selectedFile.type || "unknown type"}`;
   }, [selectedFile]);
+  const hasCurrentSvgPreview =
+    result !== null &&
+    result.preview.previewVersion === currentPreviewVersion &&
+    result.preview.svgMarkup.includes("<svg");
+  const previewSvgDataUrl = useMemo(() => {
+    if (!hasCurrentSvgPreview || result === null) {
+      return null;
+    }
+
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(result.preview.svgMarkup)}`;
+  }, [hasCurrentSvgPreview, result]);
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
@@ -31,6 +45,7 @@ export function GeneratorWorkbench() {
     setErrorMessage(null);
     setEngineMode(null);
     setPreviewFontFamily(null);
+    setPreviewFontState("idle");
   }
 
   async function handleGenerate() {
@@ -47,6 +62,7 @@ export function GeneratorWorkbench() {
 
     setIsGenerating(true);
     setPreviewFontFamily(null);
+    setPreviewFontState("idle");
     const { engineMode: nextEngineMode, result: nextResult } = await generateInkformResult(
       activeFile,
       previewText
@@ -81,13 +97,21 @@ export function GeneratorWorkbench() {
   }
 
   useEffect(() => {
-    if (result === null || result.artifact.mimeType !== "font/ttf") {
+    if (
+      result === null ||
+      result.artifact.mimeType !== "font/ttf" ||
+      hasCurrentSvgPreview
+    ) {
       return;
     }
 
     let cancelled = false;
-    const familyName = `${result.artifact.familyName}-${result.artifact.binaryLabel}`;
-    const fontFace = new FontFace(familyName, Uint8Array.from(result.artifact.bytes));
+    const familyName = `${result.artifact.familyName}-${result.artifact.binaryLabel}-${result.artifact.binaryHash}`;
+    const blob = new Blob([Uint8Array.from(result.artifact.bytes)], {
+      type: result.artifact.mimeType
+    });
+    const objectUrl = URL.createObjectURL(blob);
+    const fontFace = new FontFace(familyName, `url("${objectUrl}") format("truetype")`);
 
     void fontFace
       .load()
@@ -98,18 +122,21 @@ export function GeneratorWorkbench() {
 
         document.fonts.add(loadedFace);
         setPreviewFontFamily(familyName);
+        setPreviewFontState("loaded");
       })
       .catch(() => {
         if (!cancelled) {
           setPreviewFontFamily(null);
+          setPreviewFontState("failed");
         }
       });
 
     return () => {
       cancelled = true;
       document.fonts.delete(fontFace);
+      URL.revokeObjectURL(objectUrl);
     };
-  }, [result]);
+  }, [hasCurrentSvgPreview, result]);
 
   return (
     <section
@@ -188,6 +215,9 @@ export function GeneratorWorkbench() {
 
       {result ? (
         <div style={{ display: "grid", gap: "1rem" }}>
+          <p style={{ margin: 0, color: "var(--muted)", fontSize: "0.95rem" }}>
+            Rendering mode: {engineMode === "wasm" ? "Rust engine" : "Compatibility fallback"}
+          </p>
           <article
             style={{
               padding: "1.25rem",
@@ -207,21 +237,58 @@ export function GeneratorWorkbench() {
             >
               Preview
             </p>
-            <h3
-              style={{
-                marginBottom: "0.5rem",
-                fontSize: "1.8rem",
-                fontFamily:
-                  previewFontFamily === null
-                    ? 'Georgia, "Times New Roman", serif'
-                    : `"${previewFontFamily}", Georgia, "Times New Roman", serif`
-              }}
-            >
-              {previewText.trim() || starterText}
-            </h3>
+            {hasCurrentSvgPreview ? (
+              <div
+                style={{
+                  marginTop: "0.75rem",
+                  marginBottom: "0.75rem",
+                  border: "1px solid var(--border)",
+                  borderRadius: "18px",
+                  overflow: "hidden",
+                  background: "#f7efe3"
+                }}
+              >
+                {previewSvgDataUrl !== null ? (
+                  <Image
+                    src={previewSvgDataUrl}
+                    alt="Inkform preview"
+                    unoptimized
+                    width={1200}
+                    height={320}
+                    style={{ display: "block", width: "100%", height: "auto" }}
+                  />
+                ) : null}
+              </div>
+            ) : (
+              <h3
+                style={{
+                  marginBottom: "0.75rem",
+                  fontSize: "1.8rem",
+                  fontFamily:
+                    previewFontFamily === null
+                      ? 'Georgia, "Times New Roman", serif'
+                      : `"${previewFontFamily}", Georgia, "Times New Roman", serif`
+                }}
+              >
+                {previewText.trim() || starterText}
+              </h3>
+            )}
             <p style={{ margin: 0, color: "var(--muted)", lineHeight: 1.7 }}>
               {result.preview.renderPlan}
             </p>
+            {result.preview.previewVersion !== currentPreviewVersion ? (
+              <p style={{ marginBottom: 0, color: "#8a5b2d", lineHeight: 1.7 }}>
+                This preview result came from an older in-memory build. Generate the preview again
+                to refresh it with the current renderer.
+              </p>
+            ) : null}
+            {!hasCurrentSvgPreview && previewFontState === "failed" ? (
+              <p style={{ marginBottom: 0, color: "#932f1a", lineHeight: 1.7 }}>
+                The generated font file could not be loaded into the browser preview. Downloading
+                may still work, but this on-page preview is currently falling back to the system
+                serif font.
+              </p>
+            ) : null}
             {result.preview.unsupportedCharacters.length > 0 ? (
               <p style={{ marginBottom: 0, color: "var(--muted)" }}>
                 Some characters still need extra support:{" "}

@@ -11,6 +11,7 @@ export type FontArtifact = {
   scriptPackId: ScriptPackId;
   glyphCount: number;
   binaryLabel: string;
+  binaryHash: string;
   downloadName: string;
   mimeType: string;
   bytes: number[];
@@ -19,6 +20,8 @@ export type FontArtifact = {
 export type PreviewResponse = {
   renderPlan: string;
   unsupportedCharacters: string[];
+  previewVersion: string;
+  svgMarkup: string;
 };
 
 export type GenerationResult = {

@@ -1,6 +1,8 @@
 use crate::domain::{FontArtifact, PreviewRequest, PreviewResponse};
 use crate::error::{InkformError, InkformErrorKind};
 
+pub const PREVIEW_VERSION: &str = "svg-v2";
+
 /// Build a preview plan for text rendered with a generated font artifact.
 ///
 /// # Errors
@@ -36,5 +38,7 @@ pub fn preview_text(
             font_artifact.family_name
         ),
         unsupported_characters,
+        preview_version: String::from(PREVIEW_VERSION),
+        svg_markup: String::new(),
     })
 }

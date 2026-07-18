@@ -1,15 +1,16 @@
+use crate::base_font::base_font_glyph;
 use crate::domain::{GlyphCandidate, SampleImage, ScriptPack};
 use crate::extraction::{ExtractionResult, extract_handwriting};
+use crate::reference_bank::{ReferenceStyle, build_reference_glyph};
 use image::{GrayImage, ImageReader, Luma};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::fmt::Write;
 use std::io::Cursor;
 
 const UNITS_PER_EM: u16 = 1000;
 const ASCENDER: i16 = 820;
 const DESCENDER: i16 = -220;
 const LINE_GAP: i16 = 180;
-const SHEET_COLUMNS: usize = 17;
-const SHEET_ROWS: usize = 7;
 
 #[derive(Debug, Clone)]
 struct GlyphDefinition {
@@ -20,6 +21,14 @@ struct GlyphDefinition {
     x_max: i16,
     y_max: i16,
     data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+struct GeneratedGlyph {
+    character: char,
+    advance_width: u16,
+    left_side_bearing: i16,
+    contours: Vec<Vec<(i16, i16)>>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,8 +51,9 @@ struct StyleProfile {
 
 #[derive(Debug, Clone)]
 struct ExtractedShape {
-    outline: Vec<(i16, i16)>,
     measures: ComponentMeasures,
+    #[allow(dead_code)]
+    outline: Vec<(i16, i16)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -62,23 +72,33 @@ pub fn build_ttf(
     script_pack: &ScriptPack,
     glyphs: &[GlyphCandidate],
 ) -> Vec<u8> {
-    let base_seed = hash_bytes(&sample_image.bytes);
-    let extraction_result = extract_handwriting(sample_image);
-    let decoded_sheet = decode_sheet(sample_image);
-    let glyph_definitions = build_glyph_definitions(
-        base_seed,
-        script_pack,
-        glyphs,
-        decoded_sheet.as_ref(),
-        extraction_result.as_ref(),
-    );
+    let generated_glyphs = build_generated_glyphs(sample_image, script_pack, glyphs);
+    let glyph_definitions = build_glyph_definitions_from_generated(&generated_glyphs);
+    build_ttf_from_definitions(family_name, script_pack, &glyph_definitions)
+}
 
-    let metrics = FontMetrics::from_glyphs(&glyph_definitions);
-    let head = build_head_table(metrics);
+#[must_use]
+pub fn build_preview_svg(
+    sample_image: &SampleImage,
+    script_pack: &ScriptPack,
+    glyphs: &[GlyphCandidate],
+    preview_text: &str,
+) -> String {
+    let generated_glyphs = build_generated_glyphs(sample_image, script_pack, glyphs);
+    build_preview_svg_from_generated(&generated_glyphs, preview_text)
+}
+
+fn build_ttf_from_definitions(
+    family_name: &str,
+    script_pack: &ScriptPack,
+    glyph_definitions: &[GlyphDefinition],
+) -> Vec<u8> {
+    let metrics = FontMetrics::from_glyphs(glyph_definitions);
     let hhea = build_hhea_table(metrics, glyph_definitions.len());
-    let maxp = build_maxp_table(&glyph_definitions);
-    let hmtx = build_hmtx_table(&glyph_definitions);
-    let (glyf, loca) = build_glyf_and_loca_tables(&glyph_definitions);
+    let maxp = build_maxp_table(glyph_definitions);
+    let hmtx = build_hmtx_table(glyph_definitions);
+    let (glyf, loca, loca_format) = build_glyf_and_loca_tables(glyph_definitions);
+    let head = build_head_table(metrics, loca_format);
     let cmap = build_cmap_table(script_pack);
     let name = build_name_table(family_name);
     let post = build_post_table();
@@ -128,6 +148,23 @@ pub fn build_ttf(
     ];
 
     build_font_file(tables)
+}
+
+fn build_generated_glyphs(
+    sample_image: &SampleImage,
+    script_pack: &ScriptPack,
+    glyphs: &[GlyphCandidate],
+) -> Vec<GeneratedGlyph> {
+    let base_seed = hash_bytes(&sample_image.bytes);
+    let extraction_result = extract_handwriting(sample_image);
+    let decoded_sheet = decode_sheet(sample_image);
+    build_glyph_shapes(
+        base_seed,
+        script_pack,
+        glyphs,
+        decoded_sheet.as_ref(),
+        extraction_result.as_ref(),
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -197,13 +234,13 @@ impl FontMetrics {
     }
 }
 
-fn build_glyph_definitions(
+fn build_glyph_shapes(
     base_seed: u64,
     script_pack: &ScriptPack,
     glyphs: &[GlyphCandidate],
     decoded_sheet: Option<&GrayImage>,
     extraction_result: Option<&ExtractionResult>,
-) -> Vec<GlyphDefinition> {
+) -> Vec<GeneratedGlyph> {
     let extracted_shapes = extraction_result.map_or_else(
         || decoded_sheet.map(extract_shape_library).unwrap_or_default(),
         |result| {
@@ -225,32 +262,85 @@ fn build_glyph_definitions(
         },
     );
     let style_profile = derive_style_profile(decoded_sheet, &extracted_shapes);
-    let mut definitions = Vec::with_capacity(glyphs.len() + 1);
-    definitions.push(notdef_glyph());
+    let mut generated = Vec::with_capacity(glyphs.len());
 
     for (glyph_index, character) in script_pack.glyphs.iter().enumerate() {
         let candidate = glyphs
             .get(glyph_index)
             .map_or(*character, |glyph| glyph.character);
         let seed = mix_seed(base_seed, *character);
-        let extracted_glyph = select_remixed_shape(
+        let hinted_shape = select_shape_for_glyph(&extracted_shapes, candidate, glyph_index, seed);
+        let reference_style = reference_style(style_profile, hinted_shape);
+        let remixed_contours = select_remixed_shape(
             &extracted_shapes,
             candidate,
             glyph_index,
-            script_pack.glyph_count(),
+            glyphs.len(),
             style_profile,
             seed,
         )
-        .or_else(|| {
-            decoded_sheet.and_then(|sheet| {
-                extract_grid_glyph(sheet, glyph_index).or_else(|| {
-                    extract_freeform_glyph(sheet, glyph_index, script_pack.glyph_count())
-                })
-            })
+        .map(|outline| vec![outline]);
+        let base_font_glyph = base_font_glyph(candidate)
+            .map(|contours| deform_base_font_contours(candidate, &contours, reference_style, seed));
+        let reference_glyph = build_reference_glyph(candidate, reference_style, seed);
+        let advance_width = glyph_advance_width(candidate);
+        let contours = match base_font_glyph {
+            Some(contours)
+                if remixed_contours.is_none()
+                    && !contours.is_empty()
+                    && matches!(
+                        classify_glyph(candidate),
+                        GlyphKind::Digit | GlyphKind::Punctuation
+                    ) =>
+            {
+                contours
+            }
+            _ => match remixed_contours {
+                Some(contours) if !contours.is_empty() => contours,
+                _ => match base_font_glyph {
+                    Some(contours) if !contours.is_empty() => contours,
+                    _ => match reference_glyph {
+                        Some(contours) if !contours.is_empty() => contours,
+                        _ => algorithmic_contours(candidate, advance_width, seed, style_profile),
+                    },
+                },
+            },
+        };
+        generated.push(GeneratedGlyph {
+            character: candidate,
+            advance_width,
+            left_side_bearing: if candidate == ' ' { 0 } else { 32 },
+            contours,
         });
-        definitions.push(extracted_glyph.map_or_else(
-            || build_algorithmic_glyph(candidate, seed, style_profile),
-            |points| build_simple_polygon_glyph(glyph_advance_width(candidate), 32, &points),
+    }
+
+    generated
+}
+
+fn build_glyph_definitions_from_generated(
+    generated_glyphs: &[GeneratedGlyph],
+) -> Vec<GlyphDefinition> {
+    let mut definitions = Vec::with_capacity(generated_glyphs.len() + 1);
+    definitions.push(notdef_glyph());
+
+    for glyph in generated_glyphs {
+        if glyph.contours.is_empty() {
+            definitions.push(GlyphDefinition {
+                advance_width: glyph.advance_width,
+                left_side_bearing: glyph.left_side_bearing,
+                x_min: 0,
+                y_min: 0,
+                x_max: 0,
+                y_max: 0,
+                data: empty_glyph_data(),
+            });
+            continue;
+        }
+
+        definitions.push(build_multi_contour_glyph(
+            glyph.advance_width,
+            glyph.left_side_bearing,
+            &glyph.contours,
         ));
     }
 
@@ -369,6 +459,149 @@ fn derive_style_profile_from_shapes(extracted_shapes: &[ExtractedShape]) -> Opti
     })
 }
 
+fn reference_style(
+    style_profile: StyleProfile,
+    hinted_shape: Option<&ExtractedShape>,
+) -> ReferenceStyle {
+    let hint_width_scale = hinted_shape.map_or(style_profile.width_scale, |shape| {
+        clamp_f32(shape.measures.width_ratio.mul_add(0.42, 0.74), 0.74, 1.22)
+    });
+    let hint_slant = hinted_shape.map_or(style_profile.slant, |shape| {
+        clamp_f32(shape.measures.slant * 260.0, -90.0, 130.0)
+    });
+    let hint_stroke_width = hinted_shape.map_or(style_profile.stroke_width, |shape| {
+        clamp_f32(shape.measures.density.mul_add(92.0, 26.0), 24.0, 104.0)
+    });
+
+    ReferenceStyle {
+        slant: (style_profile.slant + hint_slant) * 0.5,
+        width_scale: (style_profile.width_scale + hint_width_scale) * 0.5,
+        stroke_width: (style_profile.stroke_width + hint_stroke_width) * 0.5,
+        waviness: style_profile.waviness,
+        baseline_lift: style_profile.baseline_lift,
+        body_height: style_profile.body_height,
+        ascender_height: style_profile.ascender_height,
+        descender_depth: style_profile.descender_depth,
+    }
+}
+
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+fn deform_base_font_contours(
+    character: char,
+    contours: &[Vec<(i16, i16)>],
+    style: ReferenceStyle,
+    seed: u64,
+) -> Vec<Vec<(i16, i16)>> {
+    let glyph_kind = classify_glyph(character);
+    let width_bias = match glyph_kind {
+        GlyphKind::Uppercase => 1.08,
+        GlyphKind::Lowercase => 0.98,
+        GlyphKind::Descender => 1.02,
+        GlyphKind::Digit => 0.94,
+        GlyphKind::Punctuation => 0.72,
+    };
+    let vertical_bias = match glyph_kind {
+        GlyphKind::Uppercase => 1.04,
+        GlyphKind::Lowercase => 0.94,
+        GlyphKind::Descender => 1.08,
+        GlyphKind::Digit => 0.9,
+        GlyphKind::Punctuation => 0.62,
+    };
+    let style_width = style
+        .width_scale
+        .mul_add(width_bias, random_unit(seed, 301) * 0.18);
+    let style_slant = style.slant + random_unit(seed, 302) * 34.0;
+    let bounce = style.baseline_lift + random_unit(seed, 303) * 34.0;
+    let wobble = style.waviness.mul_add(0.85, 12.0);
+    let body_scale =
+        (style.body_height / 520.0).mul_add(vertical_bias, random_unit(seed, 304) * 0.1);
+    let ascender_scale =
+        (style.ascender_height / 760.0).mul_add(vertical_bias, random_unit(seed, 305) * 0.12);
+    let descender_shift = style
+        .descender_depth
+        .mul_add(0.7, random_unit(seed, 306) * 26.0);
+
+    contours
+        .iter()
+        .enumerate()
+        .map(|(contour_index, contour)| {
+            let deformed = contour
+                .iter()
+                .enumerate()
+                .map(|(point_index, (x, y))| {
+                    let center_x = 310.0_f32;
+                    let normalized_x = f32::from(*x) - center_x;
+                    let normalized_y = f32::from(*y);
+                    let channel_base =
+                        u32::try_from(contour_index.saturating_mul(97) + point_index).unwrap_or(0);
+                    let progress_x = normalized_x / 260.0;
+                    let progress_y = normalized_y / 700.0;
+                    let wave_x = progress_y.sin() * wobble * 0.42;
+                    let wave_y = progress_x.sin() * wobble * 0.58;
+                    let jitter_x = random_unit(seed.rotate_left(11), channel_base) * wobble * 0.34;
+                    let jitter_y = random_unit(seed.rotate_left(17), channel_base) * wobble * 0.4;
+                    let vertical_scale = if normalized_y > style.body_height {
+                        ascender_scale
+                    } else {
+                        body_scale
+                    };
+                    let descended_y = if normalized_y < 0.0 {
+                        descender_shift.mul_add(-0.72, normalized_y)
+                    } else {
+                        normalized_y
+                    };
+                    let side_pull = progress_x * progress_x.abs() * 18.0;
+                    let deformed_x = normalized_x.mul_add(
+                        style_width,
+                        style_slant.mul_add(descended_y / 620.0, center_x),
+                    ) + wave_x
+                        + jitter_x
+                        + side_pull;
+                    let deformed_y =
+                        descended_y.mul_add(vertical_scale, bounce) + wave_y + jitter_y;
+                    (
+                        round_to_i16(clamp_f32(deformed_x, 12.0, 608.0)),
+                        round_to_i16(clamp_f32(deformed_y, -240.0, 820.0)),
+                    )
+                })
+                .collect::<Vec<_>>();
+            simplify_contour(&deformed)
+        })
+        .filter(|contour| contour.len() >= 3)
+        .collect::<Vec<_>>()
+}
+
+fn simplify_contour(points: &[(i16, i16)]) -> Vec<(i16, i16)> {
+    if points.len() <= 96 {
+        return dedupe_contour(points);
+    }
+
+    let deduped = dedupe_contour(points);
+    if deduped.len() <= 96 {
+        return deduped;
+    }
+
+    let stride = deduped.len().div_ceil(96);
+    deduped.iter().step_by(stride).copied().collect::<Vec<_>>()
+}
+
+fn dedupe_contour(points: &[(i16, i16)]) -> Vec<(i16, i16)> {
+    let mut deduped = Vec::with_capacity(points.len());
+
+    for point in points {
+        if deduped.last().copied() == Some(*point) {
+            continue;
+        }
+        deduped.push(*point);
+    }
+
+    if deduped.len() >= 2 && deduped.first().copied() == deduped.last().copied() {
+        let _ = deduped.pop();
+    }
+
+    deduped
+}
+
 fn extract_shape_library(sheet: &GrayImage) -> Vec<ExtractedShape> {
     let Ok(sheet_width) = usize::try_from(sheet.width()) else {
         return Vec::new();
@@ -386,7 +619,7 @@ fn extract_shape_library(sheet: &GrayImage) -> Vec<ExtractedShape> {
         .filter_map(|component| {
             let measures = measure_component(component)?;
             let outline = build_shape_from_points(component)?;
-            Some(ExtractedShape { outline, measures })
+            Some(ExtractedShape { measures, outline })
         })
         .collect::<Vec<_>>();
 
@@ -399,6 +632,7 @@ fn extract_shape_library(sheet: &GrayImage) -> Vec<ExtractedShape> {
     shapes
 }
 
+#[allow(dead_code)]
 fn select_remixed_shape(
     shapes: &[ExtractedShape],
     character: char,
@@ -417,17 +651,22 @@ fn select_shape_for_glyph(
     glyph_index: usize,
     seed: u64,
 ) -> Option<&ExtractedShape> {
-    if shapes.is_empty() {
+    let plausible_shapes = shapes
+        .iter()
+        .filter(|shape| is_plausible_shape_for_glyph(shape, character))
+        .collect::<Vec<_>>();
+
+    if plausible_shapes.is_empty() {
         return None;
     }
 
     let target_embedding = target_embedding(character);
-    let mut ranked_shapes = shapes
+    let mut ranked_shapes = plausible_shapes
         .iter()
         .enumerate()
         .map(|(index, shape)| {
             let distance = embedding_distance(target_embedding, shape_embedding(shape));
-            (index, shape, distance)
+            (index, *shape, distance)
         })
         .collect::<Vec<_>>();
 
@@ -437,6 +676,28 @@ fn select_shape_for_glyph(
     let spread_seed = usize::try_from(seed & 0xFFFF).unwrap_or(0);
     let selected_index = (glyph_index + spread_seed) % shortlist.len().max(1);
     shortlist.get(selected_index).map(|(_, shape, _)| *shape)
+}
+
+fn is_plausible_shape_for_glyph(shape: &ExtractedShape, character: char) -> bool {
+    let measures = shape.measures;
+
+    if shape.outline.len() < 12 {
+        return false;
+    }
+
+    match classify_glyph(character) {
+        GlyphKind::Uppercase | GlyphKind::Lowercase | GlyphKind::Descender | GlyphKind::Digit => {
+            (0.22..=1.45).contains(&measures.width_ratio)
+                && (0.68..=4.4).contains(&measures.height_ratio)
+                && (0.08..=0.78).contains(&measures.density)
+                && measures.baseline_offset <= 0.38
+        }
+        GlyphKind::Punctuation => {
+            (0.08..=0.95).contains(&measures.width_ratio)
+                && (0.18..=2.2).contains(&measures.height_ratio)
+                && (0.05..=0.8).contains(&measures.density)
+        }
+    }
 }
 
 const fn shape_embedding(shape: &ExtractedShape) -> StyleEmbedding {
@@ -507,6 +768,7 @@ fn embedding_distance(left: StyleEmbedding, right: StyleEmbedding) -> f32 {
 }
 
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+#[allow(dead_code)]
 fn remix_shape_outline(
     shape: &ExtractedShape,
     character: char,
@@ -797,27 +1059,22 @@ fn round_to_i16(value: f32) -> i16 {
     clamp_i32_to_i16(value.round() as i32)
 }
 
-fn build_algorithmic_glyph(
+fn algorithmic_contours(
     character: char,
+    advance_width: u16,
     seed: u64,
     style_profile: StyleProfile,
-) -> GlyphDefinition {
+) -> Vec<Vec<(i16, i16)>> {
     if character == ' ' {
-        return GlyphDefinition {
-            advance_width: 320,
-            left_side_bearing: 0,
-            x_min: 0,
-            y_min: 0,
-            x_max: 0,
-            y_max: 0,
-            data: empty_glyph_data(),
-        };
+        return Vec::new();
     }
 
-    let advance_width = glyph_advance_width(character);
-    let points = build_handwritten_outline(character, advance_width, seed, style_profile);
-
-    build_simple_polygon_glyph(advance_width, 32, &points)
+    vec![build_handwritten_outline(
+        character,
+        advance_width,
+        seed,
+        style_profile,
+    )]
 }
 
 const fn glyph_advance_width(character: char) -> u16 {
@@ -836,7 +1093,10 @@ fn decode_sheet(sample_image: &SampleImage) -> Option<GrayImage> {
     Some(image.to_luma8())
 }
 
+#[allow(dead_code)]
 fn extract_grid_glyph(sheet: &GrayImage, glyph_index: usize) -> Option<Vec<(i16, i16)>> {
+    const SHEET_COLUMNS: usize = 17;
+    const SHEET_ROWS: usize = 7;
     if glyph_index >= SHEET_COLUMNS * SHEET_ROWS {
         return None;
     }
@@ -936,6 +1196,7 @@ fn extract_grid_glyph(sheet: &GrayImage, glyph_index: usize) -> Option<Vec<(i16,
     Some(top_points)
 }
 
+#[allow(dead_code)]
 fn extract_freeform_glyph(
     sheet: &GrayImage,
     glyph_index: usize,
@@ -1042,7 +1303,7 @@ fn build_shape_from_points(points: &[(usize, usize)]) -> Option<Vec<(i16, i16)>>
         return None;
     }
 
-    let outline = trace_component_outline(points)?;
+    let outline = sample_component_outline(points)?;
     let normalized_outline = normalize_outline_to_font(&outline)?;
     if normalized_outline.len() < 4 {
         return None;
@@ -1055,145 +1316,54 @@ const fn is_ink(pixel: Luma<u8>) -> bool {
     pixel.0[0] < 210
 }
 
-fn trace_component_outline(points: &[(usize, usize)]) -> Option<Vec<(usize, usize)>> {
-    type Vertex = (usize, usize);
-    type Edge = (Vertex, Vertex);
-
-    let occupied = points.iter().copied().collect::<HashSet<_>>();
-    if occupied.is_empty() {
+fn sample_component_outline(points: &[(usize, usize)]) -> Option<Vec<(usize, usize)>> {
+    let min_x = points.iter().map(|(x, _)| *x).min()?;
+    let max_x = points.iter().map(|(x, _)| *x).max()?;
+    let min_y = points.iter().map(|(_, y)| *y).min()?;
+    let max_y = points.iter().map(|(_, y)| *y).max()?;
+    if max_x <= min_x || max_y <= min_y {
         return None;
     }
 
-    let mut boundary_edges = HashSet::<Edge>::new();
-    for &(x, y) in &occupied {
-        let edges = [
-            ((x, y), (x + 1, y)),
-            ((x + 1, y), (x + 1, y + 1)),
-            ((x, y + 1), (x + 1, y + 1)),
-            ((x, y), (x, y + 1)),
-        ];
+    let sample_columns = 24_usize;
+    let width_span = (max_x - min_x + 1).max(sample_columns);
+    let mut top_points = Vec::new();
+    let mut bottom_points = Vec::new();
 
-        for edge in edges {
-            let canonical = canonical_edge(edge);
-            if !boundary_edges.insert(canonical) {
-                boundary_edges.remove(&canonical);
+    for sample_index in 0..sample_columns {
+        let local_x = min_x + ((sample_index * width_span) / sample_columns).min(width_span - 1);
+        let column_range_end = (local_x + (width_span / sample_columns).max(1)).min(max_x + 1);
+
+        let mut top_hit: Option<usize> = None;
+        let mut bottom_hit: Option<usize> = None;
+
+        for x in local_x..column_range_end {
+            for &(point_x, point_y) in points {
+                if point_x != x {
+                    continue;
+                }
+
+                top_hit = Some(top_hit.map_or(point_y, |current| current.min(point_y)));
+                bottom_hit = Some(bottom_hit.map_or(point_y, |current| current.max(point_y)));
             }
         }
-    }
 
-    if boundary_edges.is_empty() {
-        return None;
-    }
-
-    let mut adjacency = HashMap::<Vertex, Vec<Vertex>>::new();
-    for &(start, end) in &boundary_edges {
-        adjacency.entry(start).or_default().push(end);
-        adjacency.entry(end).or_default().push(start);
-    }
-
-    let start = adjacency.keys().min().copied()?;
-    let mut outline = Vec::new();
-    let mut current = start;
-    let mut previous: Option<Vertex> = None;
-
-    loop {
-        outline.push(current);
-        let neighbors = adjacency.get(&current)?;
-        let next = if neighbors.len() == 1 {
-            neighbors[0]
-        } else {
-            choose_next_vertex(current, previous, neighbors)?
+        let Some(top_y) = top_hit else {
+            continue;
         };
+        let bottom_y = bottom_hit.unwrap_or(top_y);
 
-        previous = Some(current);
-        current = next;
-
-        if current == start {
-            break;
-        }
-
-        if outline.len() > boundary_edges.len().saturating_mul(2) {
-            return None;
-        }
+        top_points.push((local_x, top_y));
+        bottom_points.push((local_x, bottom_y));
     }
 
-    let simplified = remove_collinear_points(&outline);
-    if simplified.len() < 4 {
+    if top_points.len() < 4 {
         return None;
     }
 
-    Some(resample_outline(&simplified, 160))
-}
-
-fn canonical_edge(edge: ((usize, usize), (usize, usize))) -> ((usize, usize), (usize, usize)) {
-    if edge.0 <= edge.1 {
-        edge
-    } else {
-        (edge.1, edge.0)
-    }
-}
-
-fn choose_next_vertex(
-    current: (usize, usize),
-    previous: Option<(usize, usize)>,
-    neighbors: &[(usize, usize)],
-) -> Option<(usize, usize)> {
-    if previous.is_none() {
-        return neighbors.iter().copied().min_by_key(|neighbor| {
-            let dx = neighbor.0.abs_diff(current.0);
-            let dy = neighbor.1.abs_diff(current.1);
-            (dy, dx, *neighbor)
-        });
-    }
-
-    let previous = previous?;
-    neighbors
-        .iter()
-        .copied()
-        .filter(|neighbor| *neighbor != previous)
-        .min_by_key(|neighbor| {
-            let dx = neighbor.0.abs_diff(current.0);
-            let dy = neighbor.1.abs_diff(current.1);
-            (dy, dx, *neighbor)
-        })
-        .or(Some(previous))
-}
-
-fn remove_collinear_points(points: &[(usize, usize)]) -> Vec<(usize, usize)> {
-    if points.len() < 3 {
-        return points.to_vec();
-    }
-
-    let mut simplified = Vec::with_capacity(points.len());
-    for index in 0..points.len() {
-        let previous = points[(index + points.len() - 1) % points.len()];
-        let current = points[index];
-        let next = points[(index + 1) % points.len()];
-
-        let delta_prev_x =
-            i64::try_from(current.0).unwrap_or(0) - i64::try_from(previous.0).unwrap_or(0);
-        let delta_prev_y =
-            i64::try_from(current.1).unwrap_or(0) - i64::try_from(previous.1).unwrap_or(0);
-        let delta_next_x =
-            i64::try_from(next.0).unwrap_or(0) - i64::try_from(current.0).unwrap_or(0);
-        let delta_next_y =
-            i64::try_from(next.1).unwrap_or(0) - i64::try_from(current.1).unwrap_or(0);
-
-        if delta_prev_x * delta_next_y != delta_prev_y * delta_next_x {
-            simplified.push(current);
-        }
-    }
-
-    simplified
-}
-
-fn resample_outline(points: &[(usize, usize)], max_points: usize) -> Vec<(usize, usize)> {
-    if points.len() <= max_points {
-        return points.to_vec();
-    }
-
-    let stride = points.len().div_ceil(max_points);
-    points.iter().step_by(stride).copied().collect()
+    bottom_points.reverse();
+    top_points.extend(bottom_points);
+    Some(top_points)
 }
 
 #[allow(
@@ -1245,6 +1415,7 @@ fn normalize_outline_to_font(points: &[(usize, usize)]) -> Option<Vec<(i16, i16)
     Some(normalized)
 }
 
+#[allow(dead_code)]
 fn scale_to_units(value: usize, full_span: usize, target_span: i16) -> i16 {
     if full_span == 0 {
         return 0;
@@ -1255,6 +1426,7 @@ fn scale_to_units(value: usize, full_span: usize, target_span: i16) -> i16 {
     clamp_i32_to_i16(numerator / denominator)
 }
 
+#[allow(dead_code)]
 fn scale_y_to_units(value: usize, full_span: usize) -> i16 {
     scale_to_units(value, full_span, 700)
 }
@@ -1264,30 +1436,49 @@ fn build_simple_polygon_glyph(
     left_side_bearing: i16,
     points: &[(i16, i16)],
 ) -> GlyphDefinition {
-    let (x_min, y_min, x_max, y_max) = bounds(points);
+    build_multi_contour_glyph(advance_width, left_side_bearing, &[points.to_vec()])
+}
+
+fn build_multi_contour_glyph(
+    advance_width: u16,
+    left_side_bearing: i16,
+    contours: &[Vec<(i16, i16)>],
+) -> GlyphDefinition {
+    let (x_min, y_min, x_max, y_max) = contour_bounds(contours);
+    let point_count = contours.iter().map(std::vec::Vec::len).sum::<usize>();
 
     let mut data = Vec::new();
-    push_i16(&mut data, 1);
+    let contour_count = i16::try_from(contours.len()).unwrap_or(i16::MAX);
+    push_i16(&mut data, contour_count);
     push_i16(&mut data, x_min);
     push_i16(&mut data, y_min);
     push_i16(&mut data, x_max);
     push_i16(&mut data, y_max);
-    let end_point = u16::try_from(points.len().saturating_sub(1)).unwrap_or(0);
-    push_u16(&mut data, end_point);
+
+    let mut point_offset = 0_usize;
+    for contour in contours {
+        point_offset = point_offset.saturating_add(contour.len());
+        let end_point = u16::try_from(point_offset.saturating_sub(1)).unwrap_or(u16::MAX);
+        push_u16(&mut data, end_point);
+    }
     push_u16(&mut data, 0);
 
-    data.extend(std::iter::repeat_n(0x01, points.len()));
+    data.extend(std::iter::repeat_n(0x01, point_count));
 
     let mut previous_x = 0_i16;
-    for (x, _) in points {
-        push_i16(&mut data, *x - previous_x);
-        previous_x = *x;
+    for contour in contours {
+        for (x, _) in contour {
+            push_i16(&mut data, *x - previous_x);
+            previous_x = *x;
+        }
     }
 
     let mut previous_y = 0_i16;
-    for (_, y) in points {
-        push_i16(&mut data, *y - previous_y);
-        previous_y = *y;
+    for contour in contours {
+        for (_, y) in contour {
+            push_i16(&mut data, *y - previous_y);
+            previous_y = *y;
+        }
     }
 
     if data.len() % 2 != 0 {
@@ -1315,15 +1506,137 @@ fn empty_glyph_data() -> Vec<u8> {
     data
 }
 
-fn bounds(points: &[(i16, i16)]) -> (i16, i16, i16, i16) {
-    let x_min = points.iter().map(|(x, _)| *x).min().unwrap_or(0);
-    let y_min = points.iter().map(|(_, y)| *y).min().unwrap_or(0);
-    let x_max = points.iter().map(|(x, _)| *x).max().unwrap_or(0);
-    let y_max = points.iter().map(|(_, y)| *y).max().unwrap_or(0);
+fn contour_bounds(contours: &[Vec<(i16, i16)>]) -> (i16, i16, i16, i16) {
+    let x_min = contours
+        .iter()
+        .flat_map(|contour| contour.iter().map(|(x, _)| *x))
+        .min()
+        .unwrap_or(0);
+    let y_min = contours
+        .iter()
+        .flat_map(|contour| contour.iter().map(|(_, y)| *y))
+        .min()
+        .unwrap_or(0);
+    let x_max = contours
+        .iter()
+        .flat_map(|contour| contour.iter().map(|(x, _)| *x))
+        .max()
+        .unwrap_or(0);
+    let y_max = contours
+        .iter()
+        .flat_map(|contour| contour.iter().map(|(_, y)| *y))
+        .max()
+        .unwrap_or(0);
     (x_min, y_min, x_max, y_max)
 }
 
-fn build_head_table(metrics: FontMetrics) -> Vec<u8> {
+fn build_preview_svg_from_generated(
+    generated_glyphs: &[GeneratedGlyph],
+    preview_text: &str,
+) -> String {
+    if preview_text.trim().is_empty() {
+        return String::new();
+    }
+
+    let glyph_map = generated_glyphs
+        .iter()
+        .map(|glyph| (glyph.character, glyph))
+        .collect::<HashMap<_, _>>();
+    let preview_scale = 0.42_f32;
+    let line_height = 420_i32;
+    let baseline_offset = 320_i32;
+    let left_padding = 40_i32;
+    let max_line_width = 1360_i32;
+    let mut x = left_padding;
+    let mut y = baseline_offset;
+    let mut max_x = left_padding;
+    let mut max_y = baseline_offset + 80;
+    let mut path_data = String::new();
+
+    for character in preview_text.chars() {
+        if character == '\n' {
+            x = left_padding;
+            y += line_height;
+            max_y = max_y.max(y + 80);
+            continue;
+        }
+
+        let Some(glyph) = glyph_map.get(&character) else {
+            x += scale_preview_value(220, preview_scale);
+            max_x = max_x.max(x);
+            continue;
+        };
+
+        let advance_width = scale_preview_value(i32::from(glyph.advance_width), preview_scale);
+        if character != ' ' && x > left_padding && x + advance_width > max_line_width {
+            x = left_padding;
+            y += line_height;
+            max_y = max_y.max(y + 80);
+        }
+
+        for contour in &glyph.contours {
+            if contour.len() < 2 {
+                continue;
+            }
+
+            let mut contour_iter = contour.iter();
+            let Some((first_x, first_y)) = contour_iter.next() else {
+                continue;
+            };
+            let _ = write!(
+                path_data,
+                "M{} {}",
+                x + scale_preview_value(i32::from(*first_x), preview_scale),
+                y - scale_preview_value(i32::from(*first_y), preview_scale)
+            );
+            for (point_x, point_y) in contour_iter {
+                let _ = write!(
+                    path_data,
+                    " L{} {}",
+                    x + scale_preview_value(i32::from(*point_x), preview_scale),
+                    y - scale_preview_value(i32::from(*point_y), preview_scale)
+                );
+            }
+            path_data.push_str(" Z ");
+        }
+
+        x += advance_width;
+        max_x = max_x.max(x);
+        max_y = max_y.max(y + 120);
+    }
+
+    if path_data.trim().is_empty() {
+        return String::new();
+    }
+
+    let svg_width = max_x.max(480) + 40;
+    let svg_height = max_y.max(420) + 40;
+
+    format!(
+        concat!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" ",
+            "viewBox=\"0 0 {} {}\" width=\"{}\" height=\"{}\" ",
+            "style=\"display:block;width:100%;height:auto\" ",
+            "preserveAspectRatio=\"xMinYMin meet\" ",
+            "role=\"img\" aria-label=\"Inkform preview\">",
+            "<rect width=\"100%\" height=\"100%\" fill=\"#f7efe3\"/>",
+            "<path d=\"{}\" fill=\"#1f1611\"/>",
+            "</svg>"
+        ),
+        svg_width,
+        svg_height,
+        svg_width,
+        svg_height,
+        path_data
+    )
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn scale_preview_value(value: i32, scale: f32) -> i32 {
+    round_to_i16((value as f32) * scale).into()
+}
+
+fn build_head_table(metrics: FontMetrics, loca_format: i16) -> Vec<u8> {
     let mut table = Vec::new();
     push_u32(&mut table, 0x0001_0000);
     push_u32(&mut table, 0x0001_0000);
@@ -1340,7 +1653,7 @@ fn build_head_table(metrics: FontMetrics) -> Vec<u8> {
     push_u16(&mut table, 0);
     push_u16(&mut table, 8);
     push_i16(&mut table, 2);
-    push_i16(&mut table, 0);
+    push_i16(&mut table, loca_format);
     push_i16(&mut table, 0);
     table
 }
@@ -1362,6 +1675,7 @@ fn build_hhea_table(metrics: FontMetrics, glyph_count: usize) -> Vec<u8> {
     push_i16(&mut table, 0);
     push_i16(&mut table, 0);
     push_i16(&mut table, 0);
+    push_i16(&mut table, 0);
     let number_of_h_metrics = u16::try_from(glyph_count).unwrap_or(u16::MAX);
     push_u16(&mut table, number_of_h_metrics);
     table
@@ -1369,11 +1683,7 @@ fn build_hhea_table(metrics: FontMetrics, glyph_count: usize) -> Vec<u8> {
 
 fn build_maxp_table(glyphs: &[GlyphDefinition]) -> Vec<u8> {
     let max_points = glyphs.iter().map(max_point_count).max().unwrap_or(0);
-    let max_contours = glyphs
-        .iter()
-        .map(|glyph| u16::from(glyph.data.len() > 10))
-        .max()
-        .unwrap_or(0);
+    let max_contours = glyphs.iter().map(contour_count).max().unwrap_or(0);
 
     let mut table = Vec::new();
     push_u32(&mut table, 0x0001_0000);
@@ -1402,6 +1712,19 @@ fn max_point_count(glyph: &GlyphDefinition) -> u16 {
     u16::try_from(flag_count).unwrap_or(u16::MAX)
 }
 
+fn contour_count(glyph: &GlyphDefinition) -> u16 {
+    if glyph.data.len() < 2 {
+        return 0;
+    }
+
+    let contour_total = i16::from_be_bytes([glyph.data[0], glyph.data[1]]);
+    if contour_total <= 0 {
+        return 0;
+    }
+
+    u16::try_from(contour_total).unwrap_or(0)
+}
+
 fn build_hmtx_table(glyphs: &[GlyphDefinition]) -> Vec<u8> {
     let mut table = Vec::new();
     for glyph in glyphs {
@@ -1411,25 +1734,35 @@ fn build_hmtx_table(glyphs: &[GlyphDefinition]) -> Vec<u8> {
     table
 }
 
-fn build_glyf_and_loca_tables(glyphs: &[GlyphDefinition]) -> (Vec<u8>, Vec<u8>) {
+fn build_glyf_and_loca_tables(glyphs: &[GlyphDefinition]) -> (Vec<u8>, Vec<u8>, i16) {
     let mut glyf = Vec::new();
     let mut offsets = Vec::with_capacity(glyphs.len() + 1);
 
     for glyph in glyphs {
-        offsets.push(u16::try_from(glyf.len() / 2).unwrap_or(u16::MAX));
+        offsets.push(glyf.len());
         glyf.extend_from_slice(&glyph.data);
         if glyf.len() % 2 != 0 {
             glyf.push(0);
         }
     }
-    offsets.push(u16::try_from(glyf.len() / 2).unwrap_or(u16::MAX));
+    offsets.push(glyf.len());
+
+    let use_short_loca = offsets
+        .iter()
+        .all(|offset| offset % 2 == 0 && u16::try_from(*offset / 2).is_ok());
 
     let mut loca = Vec::new();
-    for offset in offsets {
-        push_u16(&mut loca, offset);
+    if use_short_loca {
+        for offset in offsets {
+            push_u16(&mut loca, u16::try_from(offset / 2).unwrap_or(u16::MAX));
+        }
+        (glyf, loca, 0)
+    } else {
+        for offset in offsets {
+            push_u32(&mut loca, u32::try_from(offset).unwrap_or(u32::MAX));
+        }
+        (glyf, loca, 1)
     }
-
-    (glyf, loca)
 }
 
 fn build_cmap_table(script_pack: &ScriptPack) -> Vec<u8> {

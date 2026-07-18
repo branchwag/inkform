@@ -1,6 +1,7 @@
 import type { GenerationResult, ValidationReport } from "./engine-types";
 
 const LATIN_EXTENDED_GLYPH_TARGET = 119;
+const PREVIEW_VERSION = "svg-v2";
 
 export function validateUpload(file: File): ValidationReport {
   const notes = [
@@ -49,6 +50,7 @@ export function generateDemoResult(file: File, previewText: string): GenerationR
       scriptPackId: "latin-extended",
       glyphCount: validation.glyphTargetCount,
       binaryLabel: `inkform-demo-${file.name.replace(/\s+/g, "-").toLowerCase()}`,
+      binaryHash: `${file.size.toString(16)}-${normalizedPreview.length.toString(16)}`,
       downloadName: "inkform-preview-package.txt",
       mimeType: "text/plain;charset=utf-8",
       bytes: Array.from(
@@ -64,7 +66,9 @@ export function generateDemoResult(file: File, previewText: string): GenerationR
     },
     preview: {
       renderPlan: `Preview '${normalizedPreview}' with ${validation.glyphTargetCount} glyph targets.`,
-      unsupportedCharacters
+      unsupportedCharacters,
+      previewVersion: PREVIEW_VERSION,
+      svgMarkup: ""
     }
   };
 }
