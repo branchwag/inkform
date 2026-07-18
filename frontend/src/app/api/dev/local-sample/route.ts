@@ -2,7 +2,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
 
-const downloadsDirectory = "/home/whiterabbit/Downloads";
+const sampleDirectory = process.env.INKFORM_DEV_SAMPLE_DIRECTORY;
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 
 type CandidateFile = {
@@ -16,7 +16,14 @@ export async function GET(): Promise<Response> {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
 
-  const entries = await readdir(downloadsDirectory, { withFileTypes: true });
+  if (sampleDirectory === undefined || sampleDirectory.length === 0) {
+    return NextResponse.json(
+      { error: "Set INKFORM_DEV_SAMPLE_DIRECTORY in frontend/.env.local to use this route." },
+      { status: 503 }
+    );
+  }
+
+  const entries = await readdir(sampleDirectory, { withFileTypes: true });
   const candidates = await Promise.all(
     entries
       .filter((entry) => entry.isFile())
@@ -25,7 +32,7 @@ export async function GET(): Promise<Response> {
         return [...imageExtensions].some((extension) => lowerName.endsWith(extension));
       })
       .map(async (entry) => {
-        const path = join(downloadsDirectory, entry.name);
+        const path = join(sampleDirectory, entry.name);
         const metadata = await stat(path);
 
         return {
@@ -39,7 +46,7 @@ export async function GET(): Promise<Response> {
   candidates.sort((left, right) => right.modifiedMs - left.modifiedMs);
   const latest = candidates[0];
   if (latest === undefined) {
-    return NextResponse.json({ error: "No image files found in Downloads." }, { status: 404 });
+    return NextResponse.json({ error: "No image files found in the configured sample directory." }, { status: 404 });
   }
 
   const bytes = await readFile(latest.path);

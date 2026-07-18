@@ -16,3 +16,33 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test --workspace
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --ignore-scripts
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+      - name: Type-check frontend
+        working-directory: frontend
+        run: npm run typecheck
+      - name: Build WASM package
+        working-directory: frontend
+        run: npm run wasm:build
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build

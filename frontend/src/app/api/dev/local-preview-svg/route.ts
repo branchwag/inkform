@@ -1,11 +1,11 @@
 import { readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { NextResponse } from "next/server";
 
 const executeFile = promisify(execFile);
-const downloadsDirectory = "/home/whiterabbit/Downloads";
+const sampleDirectory = process.env.INKFORM_DEV_SAMPLE_DIRECTORY;
 const imageExtensions = [".jpg", ".jpeg", ".png", ".webp"];
 const previewText = "The quick brown fox jumps over the lazy dog.";
 
@@ -15,8 +15,8 @@ type CandidateFile = {
   path: string;
 };
 
-async function latestDownloadsImage(): Promise<CandidateFile | null> {
-  const entries = await readdir(downloadsDirectory, { withFileTypes: true });
+async function latestSampleImage(directory: string): Promise<CandidateFile | null> {
+  const entries = await readdir(directory, { withFileTypes: true });
   const candidates = await Promise.all(
     entries
       .filter((entry) => entry.isFile())
@@ -25,7 +25,7 @@ async function latestDownloadsImage(): Promise<CandidateFile | null> {
         return imageExtensions.some((extension) => lowerName.endsWith(extension));
       })
       .map(async (entry) => {
-        const path = join(downloadsDirectory, entry.name);
+        const path = join(directory, entry.name);
         const metadata = await stat(path);
 
         return {
@@ -45,9 +45,16 @@ export async function GET(): Promise<Response> {
     return NextResponse.json({ error: "Not found." }, { status: 404 });
   }
 
-  const latest = await latestDownloadsImage();
+  if (sampleDirectory === undefined || sampleDirectory.length === 0) {
+    return NextResponse.json(
+      { error: "Set INKFORM_DEV_SAMPLE_DIRECTORY in frontend/.env.local to use this route." },
+      { status: 503 }
+    );
+  }
+
+  const latest = await latestSampleImage(sampleDirectory);
   if (latest === null) {
-    return NextResponse.json({ error: "No image files found in Downloads." }, { status: 404 });
+    return NextResponse.json({ error: "No image files found in the configured sample directory." }, { status: 404 });
   }
 
   const command = [
@@ -62,7 +69,7 @@ export async function GET(): Promise<Response> {
   ];
 
   const { stdout } = await executeFile("cargo", command, {
-    cwd: "/home/whiterabbit/CodingStuff/OpenAI_hackathon",
+    cwd: resolve(process.cwd(), ".."),
     maxBuffer: 8 * 1024 * 1024
   });
 

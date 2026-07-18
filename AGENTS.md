@@ -93,6 +93,9 @@
   `frontend/src/lib/generated` for Turbopack to bundle; loading the raw public JS
   via browser `import()` can fail in Next development. Keep the `.wasm` binary in
   `frontend/public/wasm` and initialize the bundled wrapper with its public URL.
+- The development-only `/api/dev/local-*` routes require
+  `INKFORM_DEV_SAMPLE_DIRECTORY` in `frontend/.env.local`; use
+  `frontend/.env.example` as the non-machine-specific template.
 - If the browser starts showing a generic placeholder preview again, first verify that the WASM bundle was rebuilt from current Rust sources
 - In restricted sandboxes, `wasm-pack` may fail because `wasm-bindgen` install/cache paths are not writable or network access is unavailable; a local machine run is the source of truth for browser-side validation
 - The current preview fallback path is `svg-v3`, tuned to visually match the generated TTF when a browser font load genuinely fails
