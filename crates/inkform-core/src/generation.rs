@@ -1,7 +1,6 @@
-use crate::domain::{
-    FontArtifact, GenerationReport, GlyphCandidate, ProcessingStage, SampleImage, ScriptPack,
-};
+use crate::domain::{FontArtifact, GlyphCandidate, SampleImage, ScriptPack};
 use crate::error::{InkformError, InkformErrorKind};
+use crate::ttf::build_ttf;
 use crate::validation::validate_sample;
 
 /// Generate a font artifact from a validated handwriting sample.
@@ -32,19 +31,7 @@ pub fn generate_font(
         })
         .collect::<Vec<_>>();
 
-    let generation_report = GenerationReport {
-        stage: ProcessingStage::Assemble,
-        accepted_glyphs: glyphs.len(),
-        warnings: if sample_image.bytes.len() < 1024 {
-            vec![String::from(
-                "Sample byte payload is unusually small for a guided sheet.",
-            )]
-        } else {
-            Vec::new()
-        },
-    };
-
-    let binary = build_placeholder_font_binary(script_pack, &generation_report);
+    let binary = build_ttf("Inkform Preview", sample_image, script_pack, &glyphs);
 
     Ok(FontArtifact {
         family_name: String::from("Inkform Preview"),
@@ -70,15 +57,4 @@ fn confidence_for(character: char, sample_size: usize) -> u8 {
     } else {
         base.saturating_sub(4)
     }
-}
-
-fn build_placeholder_font_binary(
-    script_pack: &ScriptPack,
-    generation_report: &GenerationReport,
-) -> Vec<u8> {
-    format!(
-        "INKFORM:{}:{}:{}",
-        script_pack.id, generation_report.stage as u8, generation_report.accepted_glyphs
-    )
-    .into_bytes()
 }

@@ -176,8 +176,8 @@ fn build_generation_payload(
         escape_json(&font_artifact.script_pack_id),
         font_artifact.glyphs.len(),
         escape_json("inkform-wasm-artifact"),
-        escape_json("inkform-preview-package.txt"),
-        escape_json("text/plain;charset=utf-8"),
+        escape_json("inkform-preview.ttf"),
+        escape_json("font/ttf"),
         binary_bytes,
         escape_json(&preview_response.render_plan),
         unsupported_characters

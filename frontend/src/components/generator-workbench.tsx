@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { generateInkformResult, type EngineMode } from "../lib/inkform-engine";
 import type { GenerationResult } from "../lib/engine-types";
 
@@ -13,6 +13,8 @@ export function GeneratorWorkbench() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [engineMode, setEngineMode] = useState<EngineMode | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [previewFontFamily, setPreviewFontFamily] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedSummary = useMemo(() => {
     if (selectedFile === null) {
@@ -28,18 +30,25 @@ export function GeneratorWorkbench() {
     setResult(null);
     setErrorMessage(null);
     setEngineMode(null);
+    setPreviewFontFamily(null);
   }
 
   async function handleGenerate() {
-    if (selectedFile === null) {
+    const activeFile = selectedFile ?? fileInputRef.current?.files?.[0] ?? null;
+    if (activeFile === null) {
       setErrorMessage("Select a handwriting image before generating a preview.");
       setResult(null);
       return;
     }
 
+    if (selectedFile === null) {
+      setSelectedFile(activeFile);
+    }
+
     setIsGenerating(true);
+    setPreviewFontFamily(null);
     const { engineMode: nextEngineMode, result: nextResult } = await generateInkformResult(
-      selectedFile,
+      activeFile,
       previewText
     );
     setEngineMode(nextEngineMode);
@@ -70,6 +79,37 @@ export function GeneratorWorkbench() {
     anchor.click();
     URL.revokeObjectURL(objectUrl);
   }
+
+  useEffect(() => {
+    if (result === null || result.artifact.mimeType !== "font/ttf") {
+      return;
+    }
+
+    let cancelled = false;
+    const familyName = `${result.artifact.familyName}-${result.artifact.binaryLabel}`;
+    const fontFace = new FontFace(familyName, Uint8Array.from(result.artifact.bytes));
+
+    void fontFace
+      .load()
+      .then((loadedFace) => {
+        if (cancelled) {
+          return;
+        }
+
+        document.fonts.add(loadedFace);
+        setPreviewFontFamily(familyName);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPreviewFontFamily(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      document.fonts.delete(fontFace);
+    };
+  }, [result]);
 
   return (
     <section
@@ -106,7 +146,7 @@ export function GeneratorWorkbench() {
 
       <label style={{ display: "grid", gap: "0.5rem" }}>
         <span>Upload your handwriting sheet</span>
-        <input type="file" accept="image/*" onChange={handleFileChange} />
+        <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileChange} />
       </label>
 
       <p style={{ margin: 0, color: "var(--muted)" }}>{selectedSummary}</p>
@@ -167,7 +207,16 @@ export function GeneratorWorkbench() {
             >
               Preview
             </p>
-            <h3 style={{ marginBottom: "0.5rem", fontSize: "1.8rem" }}>
+            <h3
+              style={{
+                marginBottom: "0.5rem",
+                fontSize: "1.8rem",
+                fontFamily:
+                  previewFontFamily === null
+                    ? 'Georgia, "Times New Roman", serif'
+                    : `"${previewFontFamily}", Georgia, "Times New Roman", serif`
+              }}
+            >
               {previewText.trim() || starterText}
             </h3>
             <p style={{ margin: 0, color: "var(--muted)", lineHeight: 1.7 }}>
@@ -219,8 +268,9 @@ export function GeneratorWorkbench() {
             >
               <h3 style={{ marginTop: 0 }}>Download</h3>
               <p style={{ marginTop: 0, color: "var(--muted)", lineHeight: 1.7 }}>
-                Save the generated output so you can keep refining it. This is currently a preview
-                package while the full font compiler is being completed.
+                {result.artifact.mimeType === "font/ttf"
+                  ? "Save your generated font as a TrueType file."
+                  : "Save the generated preview package so you can keep refining the result."}
               </p>
               <button
                 type="button"
@@ -234,7 +284,7 @@ export function GeneratorWorkbench() {
                   cursor: "pointer"
                 }}
               >
-                Download my file
+                {result.artifact.mimeType === "font/ttf" ? "Download my font" : "Download preview file"}
               </button>
               <p style={{ margin: "0.85rem 0 0", color: "var(--muted)", fontSize: "0.95rem" }}>
                 File name: {result.artifact.downloadName}

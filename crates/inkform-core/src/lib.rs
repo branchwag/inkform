@@ -2,6 +2,7 @@ mod domain;
 mod error;
 mod generation;
 mod preview;
+mod ttf;
 mod validation;
 
 pub use crate::domain::{
@@ -62,6 +63,7 @@ mod tests {
 
         assert_eq!(artifact.script_pack_id, "latin-extended");
         assert!(artifact.glyphs.len() >= 32);
+        assert_eq!(&artifact.binary[0..4], &[0x00, 0x01, 0x00, 0x00]);
     }
 
     #[test]
