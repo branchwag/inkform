@@ -95,9 +95,19 @@ fn main() -> Result<(), String> {
         && let Some(extraction) = extract_handwriting_with_transcript(&sample, Some(transcript))
     {
         for (index, glyph) in extraction.glyphs.iter().enumerate() {
+            let centerline_points = glyph.centerlines.iter().map(Vec::len).sum::<usize>();
+            let centerline_lengths = glyph
+                .centerlines
+                .iter()
+                .map(|path| path.len().to_string())
+                .collect::<Vec<_>>()
+                .join(",");
             println!(
-                "anchor_component={index} character={:?} width_ratio={:.3} density={:.3}",
-                glyph.character, glyph.width_ratio, glyph.density
+                "anchor_component={index} character={:?} width_ratio={:.3} density={:.3} centerline_paths={} centerline_points={centerline_points} centerline_lengths=[{centerline_lengths}]",
+                glyph.character,
+                glyph.width_ratio,
+                glyph.density,
+                glyph.centerlines.len(),
             );
         }
     }

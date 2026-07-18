@@ -39,9 +39,12 @@
   single line, Inkform isolates terminal punctuation, partitions the word at low-ink valleys using
   transcript-derived character-width targets, and accepts anchors only when every extracted region
   passes shape validation. It must fall back to style synthesis when those checks fail
-- The global style profile must use complete source strokes. When transcript-aligned contours pass
-  safety checks, preserve their outer and inner boundaries for those exact anchor characters;
-  unseen characters continue through the shared controlled-stroke grammar
+- The global style profile must use complete source strokes. When transcript-aligned centerlines
+  pass safety checks, re-stroke those exact anchor paths; unseen characters continue through the
+  shared controlled-stroke grammar
+- Centerline extraction uses bounded Zhang-Suen thinning on an adaptive-resolution bitmap. Reuse
+  only one- or two-trajectory anchors with bounded complexity; connected cursive photos that split
+  into many branches must inform style synthesis rather than be replayed as illegible glyphs
 - For strongly cursive samples, generated alphabetic glyphs include a thin exit stroke that
   overlaps the following glyph and use tighter side bearings. Keep it as one shared contextual
   connection strategy, not a full baseline underline or disconnected decorative ligatures

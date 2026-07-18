@@ -63,6 +63,24 @@ pub fn build_glyph_from_grammar(
 }
 
 #[must_use]
+pub fn stroke_centerline(
+    points: &[(i16, i16)],
+    thickness: f32,
+    cursive_score: f32,
+) -> Vec<Vec<(i16, i16)>> {
+    if points.len() < 2 {
+        return Vec::new();
+    }
+
+    let points = points
+        .iter()
+        .map(|(x, y)| (f32::from(*x), f32::from(*y)))
+        .collect::<Vec<_>>();
+    let rounded = round_stroke_points(&points, false, cursive_score);
+    render_open_stroke(&rounded, thickness, cursive_score)
+}
+
+#[must_use]
 pub fn build_cursive_join_stroke(
     style: GlyphStyle,
     advance_width: u16,

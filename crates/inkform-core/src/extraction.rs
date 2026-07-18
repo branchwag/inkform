@@ -4,6 +4,11 @@ use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 
 const MAX_BOUNDARY_POINTS: usize = 96;
+const MAX_CENTERLINE_POINTS: usize = 56;
+const SKELETON_TARGET_DIMENSION: usize = 160;
+// Freeform photos can contain wide, anti-aliased pen strokes. Keep thinning
+// bounded, but allow enough iterations to reduce those strokes to one pixel.
+const MAX_THINNING_PASSES: usize = 256;
 type InkPoints = Vec<(usize, usize)>;
 
 #[derive(Debug)]
@@ -20,6 +25,7 @@ pub struct ExtractedGlyph {
     pub character: Option<char>,
     pub outline: Vec<(i16, i16)>,
     pub outlines: Vec<Vec<(i16, i16)>>,
+    pub centerlines: Vec<Vec<(i16, i16)>>,
     pub width_ratio: f32,
     pub height_ratio: f32,
     pub slant: f32,
@@ -113,11 +119,13 @@ fn extracted_glyph_from_points(
 ) -> Option<ExtractedGlyph> {
     let outlines = normalize_outlines_to_font(&trace_component_boundaries(points)?)?;
     let outline = outlines.iter().max_by_key(|outline| outline.len())?.clone();
+    let centerlines = extract_centerlines(points).unwrap_or_default();
     let measures = measure_component(points)?;
     Some(ExtractedGlyph {
         character,
         outline,
         outlines,
+        centerlines,
         width_ratio: measures.width_ratio,
         height_ratio: measures.height_ratio,
         slant: measures.slant,
@@ -706,6 +714,276 @@ fn normalize_outlines_to_font(outlines: &[Vec<(usize, usize)>]) -> Option<Vec<Ve
     Some(normalized)
 }
 
+fn extract_centerlines(points: &[(usize, usize)]) -> Option<Vec<Vec<(i16, i16)>>> {
+    let skeleton = skeletonize(points)?;
+    let paths = trace_skeleton_paths(&skeleton)?;
+    normalize_centerlines_to_font(&paths)
+}
+
+fn skeletonize(points: &[(usize, usize)]) -> Option<HashSet<(usize, usize)>> {
+    let min_x = points.iter().map(|(x, _)| *x).min()?;
+    let max_x = points.iter().map(|(x, _)| *x).max()?;
+    let min_y = points.iter().map(|(_, y)| *y).min()?;
+    let max_y = points.iter().map(|(_, y)| *y).max()?;
+    let source_width = max_x.checked_sub(min_x)?.checked_add(1)?;
+    let source_height = max_y.checked_sub(min_y)?.checked_add(1)?;
+    let resolution_scale = source_width
+        .max(source_height)
+        .div_ceil(SKELETON_TARGET_DIMENSION)
+        .max(1);
+    let width = source_width.div_ceil(resolution_scale).checked_add(2)?;
+    let height = source_height.div_ceil(resolution_scale).checked_add(2)?;
+    if !(3..=900).contains(&width) || !(3..=900).contains(&height) {
+        return None;
+    }
+
+    let mut bitmap = vec![vec![false; width]; height];
+    for (x, y) in points {
+        let local_x = x
+            .checked_sub(min_x)?
+            .checked_div(resolution_scale)?
+            .checked_add(1)?;
+        let local_y = y
+            .checked_sub(min_y)?
+            .checked_div(resolution_scale)?
+            .checked_add(1)?;
+        bitmap
+            .get_mut(local_y)?
+            .get_mut(local_x)
+            .map(|pixel| *pixel = true)?;
+    }
+
+    for _ in 0..MAX_THINNING_PASSES {
+        let mut changed = false;
+        for phase in 0..2 {
+            let mut removals = Vec::new();
+            for y in 1..height - 1 {
+                for x in 1..width - 1 {
+                    if bitmap[y][x] && can_remove_skeleton_pixel(&bitmap, x, y, phase) {
+                        removals.push((x, y));
+                    }
+                }
+            }
+            if !removals.is_empty() {
+                changed = true;
+                for (x, y) in removals {
+                    bitmap[y][x] = false;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut skeleton = HashSet::new();
+    for (y, row) in bitmap.iter().enumerate() {
+        for (x, pixel) in row.iter().enumerate() {
+            if *pixel {
+                skeleton.insert((x.saturating_sub(1), y.saturating_sub(1)));
+            }
+        }
+    }
+    (!skeleton.is_empty()).then_some(skeleton)
+}
+
+fn can_remove_skeleton_pixel(bitmap: &[Vec<bool>], x: usize, y: usize, phase: usize) -> bool {
+    let neighbors = skeleton_neighbors_from_bitmap(bitmap, x, y);
+    let count = neighbors.iter().filter(|value| **value).count();
+    if !(2..=6).contains(&count) || transition_count(neighbors) != 1 {
+        return false;
+    }
+    let north = neighbors[0];
+    let east = neighbors[2];
+    let south = neighbors[4];
+    let west = neighbors[6];
+    if phase == 0 {
+        !east || !south || (!north && !west)
+    } else {
+        !north || !west || (!east && !south)
+    }
+}
+
+fn skeleton_neighbors_from_bitmap(bitmap: &[Vec<bool>], x: usize, y: usize) -> [bool; 8] {
+    [
+        bitmap[y - 1][x],
+        bitmap[y - 1][x + 1],
+        bitmap[y][x + 1],
+        bitmap[y + 1][x + 1],
+        bitmap[y + 1][x],
+        bitmap[y + 1][x - 1],
+        bitmap[y][x - 1],
+        bitmap[y - 1][x - 1],
+    ]
+}
+
+fn transition_count(neighbors: [bool; 8]) -> usize {
+    neighbors
+        .iter()
+        .zip(neighbors.iter().cycle().skip(1))
+        .take(8)
+        .filter(|(left, right)| !**left && **right)
+        .count()
+}
+
+fn trace_skeleton_paths(skeleton: &HashSet<(usize, usize)>) -> Option<Vec<InkPoints>> {
+    let mut nodes = skeleton
+        .iter()
+        .copied()
+        .filter(|point| skeleton_neighbors(skeleton, *point).len() != 2)
+        .collect::<Vec<_>>();
+    nodes.sort_unstable();
+    if nodes.is_empty() {
+        let start = skeleton.iter().min().copied()?;
+        return trace_skeleton_cycle(skeleton, start).map(|path| vec![path]);
+    }
+
+    let mut visited = HashSet::new();
+    let mut paths = Vec::new();
+    for node in nodes {
+        for neighbor in skeleton_neighbors(skeleton, node) {
+            if !visited.insert(normalized_edge(node, neighbor)) {
+                continue;
+            }
+            let mut path = vec![node];
+            let mut previous = node;
+            let mut current = neighbor;
+            while skeleton_neighbors(skeleton, current).len() == 2 {
+                path.push(current);
+                let next = skeleton_neighbors(skeleton, current)
+                    .into_iter()
+                    .find(|candidate| *candidate != previous)?;
+                visited.insert(normalized_edge(current, next));
+                previous = current;
+                current = next;
+            }
+            path.push(current);
+            if path.len() >= 3 {
+                paths.push(simplify_centerline(&path));
+            }
+        }
+    }
+    (!paths.is_empty()).then_some(paths)
+}
+
+fn trace_skeleton_cycle(
+    skeleton: &HashSet<(usize, usize)>,
+    start: (usize, usize),
+) -> Option<InkPoints> {
+    let first = skeleton_neighbors(skeleton, start).into_iter().next()?;
+    let mut path = vec![start];
+    let mut previous = start;
+    let mut current = first;
+    while current != start && path.len() <= skeleton.len() {
+        path.push(current);
+        let next = skeleton_neighbors(skeleton, current)
+            .into_iter()
+            .find(|candidate| *candidate != previous)?;
+        previous = current;
+        current = next;
+    }
+    (path.len() >= 3 && current == start).then_some(simplify_centerline(&path))
+}
+
+fn skeleton_neighbors(
+    skeleton: &HashSet<(usize, usize)>,
+    point: (usize, usize),
+) -> Vec<(usize, usize)> {
+    let (x, y) = point;
+    let mut neighbors = Vec::with_capacity(8);
+    for offset_y in -1_i32..=1 {
+        for offset_x in -1_i32..=1 {
+            if offset_x == 0 && offset_y == 0 {
+                continue;
+            }
+            let Some(next_x) = i32::try_from(x)
+                .ok()
+                .and_then(|value| value.checked_add(offset_x))
+                .and_then(|value| usize::try_from(value).ok())
+            else {
+                continue;
+            };
+            let Some(next_y) = i32::try_from(y)
+                .ok()
+                .and_then(|value| value.checked_add(offset_y))
+                .and_then(|value| usize::try_from(value).ok())
+            else {
+                continue;
+            };
+            if !skeleton.contains(&(next_x, next_y)) {
+                continue;
+            }
+
+            // A diagonal beside an orthogonal neighbor only short-circuits a
+            // raster corner. Keep one direction through that corner so a
+            // staircase-shaped diagonal remains one pen path.
+            let is_diagonal = offset_x != 0 && offset_y != 0;
+            let horizontal = (next_x, y);
+            let vertical = (x, next_y);
+            if !is_diagonal || (!skeleton.contains(&horizontal) && !skeleton.contains(&vertical)) {
+                neighbors.push((next_x, next_y));
+            }
+        }
+    }
+    neighbors
+}
+
+fn normalized_edge(
+    left: (usize, usize),
+    right: (usize, usize),
+) -> ((usize, usize), (usize, usize)) {
+    if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    }
+}
+
+fn simplify_centerline(points: &[(usize, usize)]) -> InkPoints {
+    if points.len() <= MAX_CENTERLINE_POINTS {
+        return points.to_vec();
+    }
+    let stride = points.len().div_ceil(MAX_CENTERLINE_POINTS);
+    points.iter().step_by(stride).copied().collect()
+}
+
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+fn normalize_centerlines_to_font(paths: &[InkPoints]) -> Option<Vec<Vec<(i16, i16)>>> {
+    let min_x = paths.iter().flatten().map(|(x, _)| *x).min()?;
+    let max_x = paths.iter().flatten().map(|(x, _)| *x).max()?;
+    let min_y = paths.iter().flatten().map(|(_, y)| *y).min()?;
+    let max_y = paths.iter().flatten().map(|(_, y)| *y).max()?;
+    if max_x <= min_x || max_y <= min_y {
+        return None;
+    }
+    let width = max_x.checked_sub(min_x)?.checked_add(1)?;
+    let height = max_y.checked_sub(min_y)?.checked_add(1)?;
+    let scale = (520.0 / width as f32).min(700.0 / height as f32);
+    let resized_width = (width as f32 * scale).round() as i32;
+    let padding = ((520 - resized_width) / 2).max(0);
+    let baseline = (height as f32 * scale).round() as i32;
+    let normalized = paths
+        .iter()
+        .filter_map(|path| {
+            let path = path
+                .iter()
+                .map(|(x, y)| {
+                    let mapped_x = ((x.saturating_sub(min_x) as f32) * scale).round() as i32;
+                    let mapped_y = ((y.saturating_sub(min_y) as f32) * scale).round() as i32;
+                    (
+                        clamp_i32_to_i16(padding + mapped_x + 50),
+                        clamp_i32_to_i16((baseline - mapped_y).max(0)),
+                    )
+                })
+                .collect::<Vec<_>>();
+            // Short paths are thinning artifacts around joins and corners, not
+            // meaningful pen trajectories.
+            (path.len() >= 5).then_some(path)
+        })
+        .collect::<Vec<_>>();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
 fn clamp_i32_to_i16(value: i32) -> i16 {
     i16::try_from(value).unwrap_or_else(|_| {
         if value.is_negative() {
@@ -719,7 +997,7 @@ fn clamp_i32_to_i16(value: i32) -> i16 {
 #[cfg(test)]
 mod tests {
     use super::{
-        align_components_to_transcript, align_transcript_to_ink,
+        align_components_to_transcript, align_transcript_to_ink, extract_centerlines,
         extract_handwriting_with_transcript, order_components_in_reading_order,
     };
     use crate::domain::{SampleImage, SampleQuality};
@@ -788,6 +1066,24 @@ mod tests {
 
         assert!(aligned.is_some());
         assert_eq!(aligned.map_or(0, |glyphs| glyphs.len()), transcript.len());
+    }
+
+    #[test]
+    fn vectorizes_a_thick_diagonal_pen_stroke() {
+        let mut stroke = Vec::new();
+        for x in 20_usize..120 {
+            let center_y = (x / 2) + 20;
+            for y in center_y.saturating_sub(4)..=center_y.saturating_add(4) {
+                stroke.push((x, y));
+            }
+        }
+
+        let centerlines = extract_centerlines(&stroke);
+
+        assert!(
+            centerlines.is_some_and(|paths| paths.iter().any(|path| path.len() >= 5)),
+            "a thick pen stroke should produce a centerline path"
+        );
     }
 
     #[test]

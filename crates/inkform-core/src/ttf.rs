@@ -1,6 +1,8 @@
 use crate::domain::{GlyphCandidate, SampleImage, ScriptPack};
 use crate::extraction::{ExtractedGlyph, ExtractionResult, extract_handwriting_with_transcript};
-use crate::glyph_grammar::{GlyphStyle, build_cursive_join_stroke, build_glyph_from_grammar};
+use crate::glyph_grammar::{
+    GlyphStyle, build_cursive_join_stroke, build_glyph_from_grammar, stroke_centerline,
+};
 use image::{GrayImage, ImageReader, Luma};
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -357,13 +359,12 @@ fn literal_contours_for_character(
     let glyph = extraction
         .glyphs
         .iter()
-        .find(|glyph| glyph.character == Some(character))?;
-    if !is_safe_literal_anchor(glyph) {
-        return None;
-    }
+        .filter(|glyph| glyph.character == Some(character))
+        .filter(|glyph| is_safe_literal_anchor(glyph))
+        .min_by_key(|glyph| centerline_complexity(glyph))?;
 
     let contours = glyph
-        .outlines
+        .centerlines
         .iter()
         .enumerate()
         .filter_map(|(index, outline)| {
@@ -374,25 +375,36 @@ fn literal_contours_for_character(
                 seed ^ u64::try_from(index).unwrap_or(0),
             )
         })
+        .flat_map(|path| {
+            stroke_centerline(
+                &path,
+                style_profile.stroke_width * 0.92,
+                style_profile.cursive_score,
+            )
+        })
         .collect::<Vec<_>>();
 
-    (contours.len() == glyph.outlines.len()).then_some(contours)
+    (!contours.is_empty()).then_some(contours)
 }
 
 fn is_safe_literal_anchor(glyph: &ExtractedGlyph) -> bool {
-    if glyph.outlines.is_empty() || glyph.outlines.len() > 4 {
+    if glyph.centerlines.is_empty() || glyph.centerlines.len() > 2 {
         return false;
     }
 
-    // Photo-derived pixel boundaries with many turns are not usable font paths
-    // yet. Keep literal reuse conservative until centerline vectorization is in
-    // place, rather than exporting visibly distorted anchor letters.
+    // Centerline paths are re-stroked, so they preserve pen motion without the
+    // filled-polygon artifacts created by raw photo boundaries.
     glyph
-        .outlines
+        .centerlines
         .iter()
-        .all(|outline| (4..=28).contains(&outline.len()))
+        .all(|path| (5..=56).contains(&path.len()))
+        && centerline_complexity(glyph) <= 112
         && (0.08..=0.76).contains(&glyph.density)
         && (0.12..=2.8).contains(&glyph.width_ratio)
+}
+
+fn centerline_complexity(glyph: &ExtractedGlyph) -> usize {
+    glyph.centerlines.iter().map(Vec::len).sum()
 }
 
 fn cursive_join_attachment(contours: &[Vec<(i16, i16)>], style: GlyphStyle) -> Option<(i16, i16)> {
@@ -2126,7 +2138,7 @@ mod tests {
     use crate::extraction::{ExtractedGlyph, ExtractionResult};
 
     #[test]
-    fn transcript_anchor_reuses_safe_literal_contours() {
+    fn transcript_anchor_restrokes_safe_centerlines() {
         let outline = vec![
             (48, 38),
             (120, 710),
@@ -2141,6 +2153,7 @@ mod tests {
             (134, 32),
             (72, 18),
         ];
+        let centerline = vec![(84, 64), (150, 348), (264, 684), (418, 330), (526, 82)];
         let measures = ComponentMeasures {
             width_ratio: 0.74,
             height_ratio: 1.35,
@@ -2154,6 +2167,7 @@ mod tests {
                 character: Some('a'),
                 outline: outline.clone(),
                 outlines: vec![outline.clone()],
+                centerlines: vec![centerline.clone()],
                 width_ratio: measures.width_ratio,
                 height_ratio: measures.height_ratio,
                 slant: measures.slant,
@@ -2165,6 +2179,7 @@ mod tests {
                 character: None,
                 outline: outline.clone(),
                 outlines: vec![outline.clone()],
+                centerlines: vec![centerline.clone()],
                 width_ratio: measures.width_ratio,
                 height_ratio: measures.height_ratio,
                 slant: measures.slant,
@@ -2182,6 +2197,7 @@ mod tests {
             character: 'a',
             confidence_percent: 100,
         }];
+        let centerline_length = centerline.len();
         let expected_shape = ExtractedShape { measures, outline };
         let profile = derive_style_profile(None, std::slice::from_ref(&expected_shape));
         let seed = mix_seed(91, 'a');
@@ -2191,7 +2207,12 @@ mod tests {
 
         assert_eq!(generated.len(), 1);
         let expected = expected.into_iter().collect::<Vec<_>>();
-        assert_eq!(generated[0].contours.first(), expected.first());
-        assert!(generated[0].contours.len() >= expected.len());
+        assert_ne!(generated[0].contours.first(), expected.first());
+        assert!(
+            generated[0]
+                .contours
+                .first()
+                .is_some_and(|contour| contour.len() > centerline_length)
+        );
     }
 }
