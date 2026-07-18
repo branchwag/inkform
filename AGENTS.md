@@ -96,6 +96,10 @@
 - The development-only `/api/dev/local-*` routes require
   `INKFORM_DEV_SAMPLE_DIRECTORY` in `frontend/.env.local`; use
   `frontend/.env.example` as the non-machine-specific template.
+- `frontend/vercel.json` assumes Vercel's project Root Directory is `frontend`.
+  The frontend build consumes committed WASM delivery artifacts because Vercel's
+  root-directory isolation prevents it from compiling the parent Rust workspace.
+  CI rebuilds those artifacts and fails if they are stale.
 - If the browser starts showing a generic placeholder preview again, first verify that the WASM bundle was rebuilt from current Rust sources
 - In restricted sandboxes, `wasm-pack` may fail because `wasm-bindgen` install/cache paths are not writable or network access is unavailable; a local machine run is the source of truth for browser-side validation
 - The current preview fallback path is `svg-v3`, tuned to visually match the generated TTF when a browser font load genuinely fails

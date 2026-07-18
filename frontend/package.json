@@ -8,7 +8,6 @@
   },
   "scripts": {
     "dev": "bash ../scripts/dev-frontend.sh",
-    "prebuild": "npm run wasm:build",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

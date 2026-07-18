@@ -15,5 +15,10 @@ frontend/.next
 .env.*.local
 /frontend/public/wasm/*
 !/frontend/public/wasm/.gitignore
-/frontend/src/lib/generated/
+/frontend/public/wasm/inkform_wasm.js
+/frontend/public/wasm/inkform_wasm.d.ts
+!/frontend/public/wasm/inkform_wasm_bg.wasm
+/frontend/src/lib/generated/*
+!/frontend/src/lib/generated/inkform_wasm.js
+!/frontend/src/lib/generated/inkform_wasm.d.ts
 /frontend/tsconfig.tsbuildinfo

@@ -40,6 +40,8 @@ jobs:
       - name: Build WASM package
         working-directory: frontend
         run: npm run wasm:build
+      - name: Verify tracked WASM artifacts
+        run: git diff --exit-code -- frontend/public/wasm/inkform_wasm_bg.wasm frontend/src/lib/generated
       - name: Type-check frontend
         working-directory: frontend
         run: npm run typecheck

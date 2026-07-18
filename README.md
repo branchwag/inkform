@@ -50,6 +50,13 @@ To build the browser WASM package:
 bash scripts/build-wasm.sh
 ```
 
+## Vercel Deployment
+
+Import the repository into Vercel and set the project Root Directory to `frontend`.
+`frontend/vercel.json` uses the committed browser WASM artifacts, so the Hobby
+build does not need Rust or `wasm-pack`. After changing Rust code, run the WASM
+build locally and commit its generated delivery artifacts; CI verifies they are current.
+
 ## Hackathon Notes
 
 - Primary track: `Apps for Your Life`
