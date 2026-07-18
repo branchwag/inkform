@@ -1,9 +1,13 @@
 use crate::domain::{GlyphCandidate, SampleImage, ScriptPack};
+use image::{GrayImage, ImageReader, Luma};
+use std::io::Cursor;
 
 const UNITS_PER_EM: u16 = 1000;
 const ASCENDER: i16 = 820;
 const DESCENDER: i16 = -220;
 const LINE_GAP: i16 = 180;
+const SHEET_COLUMNS: usize = 17;
+const SHEET_ROWS: usize = 7;
 
 #[derive(Debug, Clone)]
 struct GlyphDefinition {
@@ -29,7 +33,9 @@ pub fn build_ttf(
     glyphs: &[GlyphCandidate],
 ) -> Vec<u8> {
     let base_seed = hash_bytes(&sample_image.bytes);
-    let glyph_definitions = build_glyph_definitions(base_seed, script_pack, glyphs);
+    let decoded_sheet = decode_sheet(sample_image);
+    let glyph_definitions =
+        build_glyph_definitions(base_seed, script_pack, glyphs, decoded_sheet.as_ref());
 
     let metrics = FontMetrics::from_glyphs(&glyph_definitions);
     let head = build_head_table(metrics);
@@ -159,6 +165,7 @@ fn build_glyph_definitions(
     base_seed: u64,
     script_pack: &ScriptPack,
     glyphs: &[GlyphCandidate],
+    decoded_sheet: Option<&GrayImage>,
 ) -> Vec<GlyphDefinition> {
     let mut definitions = Vec::with_capacity(glyphs.len() + 1);
     definitions.push(notdef_glyph());
@@ -167,9 +174,12 @@ fn build_glyph_definitions(
         let candidate = glyphs
             .get(glyph_index)
             .map_or(*character, |glyph| glyph.character);
-        definitions.push(build_algorithmic_glyph(
-            candidate,
-            mix_seed(base_seed, *character),
+        let seed = mix_seed(base_seed, *character);
+        let extracted_glyph =
+            decoded_sheet.and_then(|sheet| extract_grid_glyph(sheet, glyph_index));
+        definitions.push(extracted_glyph.map_or_else(
+            || build_algorithmic_glyph(candidate, seed),
+            |points| build_simple_polygon_glyph(glyph_advance_width(candidate), 32, &points),
         ));
     }
 
@@ -194,12 +204,7 @@ fn build_algorithmic_glyph(character: char, seed: u64) -> GlyphDefinition {
         };
     }
 
-    let advance_width = match character {
-        'A'..='Z' => 720,
-        'a'..='z' | 'Ä' | 'Ö' | 'Ü' | 'ä' | 'ö' | 'ü' | 'ß' => 620,
-        '0'..='9' => 600,
-        _ => 460,
-    };
+    let advance_width = glyph_advance_width(character);
 
     let width_span = i16::try_from(advance_width).unwrap_or(720) - 120;
     let x0 = 40 + seeded_range(seed, 0, 40);
@@ -219,6 +224,140 @@ fn build_algorithmic_glyph(character: char, seed: u64) -> GlyphDefinition {
     ];
 
     build_simple_polygon_glyph(advance_width, 32, &points)
+}
+
+const fn glyph_advance_width(character: char) -> u16 {
+    match character {
+        'A'..='Z' => 720,
+        'a'..='z' | 'Ä' | 'Ö' | 'Ü' | 'ä' | 'ö' | 'ü' | 'ß' => 620,
+        '0'..='9' => 600,
+        _ => 460,
+    }
+}
+
+fn decode_sheet(sample_image: &SampleImage) -> Option<GrayImage> {
+    let cursor = Cursor::new(&sample_image.bytes);
+    let reader = ImageReader::new(cursor).with_guessed_format().ok()?;
+    let image = reader.decode().ok()?;
+    Some(image.to_luma8())
+}
+
+fn extract_grid_glyph(sheet: &GrayImage, glyph_index: usize) -> Option<Vec<(i16, i16)>> {
+    if glyph_index >= SHEET_COLUMNS * SHEET_ROWS {
+        return None;
+    }
+
+    let sheet_width = usize::try_from(sheet.width()).ok()?;
+    let sheet_height = usize::try_from(sheet.height()).ok()?;
+    if sheet_width < SHEET_COLUMNS || sheet_height < SHEET_ROWS {
+        return None;
+    }
+
+    let cell_column = glyph_index % SHEET_COLUMNS;
+    let cell_row = glyph_index / SHEET_COLUMNS;
+
+    let cell_width = sheet_width / SHEET_COLUMNS;
+    let cell_height = sheet_height / SHEET_ROWS;
+    if cell_width < 8 || cell_height < 8 {
+        return None;
+    }
+
+    let margin_x = (cell_width / 8).max(2);
+    let margin_y = (cell_height / 8).max(2);
+    let start_x = cell_column * cell_width + margin_x;
+    let start_y = cell_row * cell_height + margin_y;
+    let end_x = ((cell_column + 1) * cell_width).saturating_sub(margin_x);
+    let end_y = ((cell_row + 1) * cell_height).saturating_sub(margin_y);
+
+    if end_x <= start_x || end_y <= start_y {
+        return None;
+    }
+
+    let mut ink_points = Vec::new();
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            if is_ink(*sheet.get_pixel(u32::try_from(x).ok()?, u32::try_from(y).ok()?)) {
+                ink_points.push((x, y));
+            }
+        }
+    }
+
+    if ink_points.len() < 24 {
+        return None;
+    }
+
+    let min_x = ink_points.iter().map(|(x, _)| *x).min()?;
+    let max_x = ink_points.iter().map(|(x, _)| *x).max()?;
+    let min_y = ink_points.iter().map(|(_, y)| *y).min()?;
+    let max_y = ink_points.iter().map(|(_, y)| *y).max()?;
+
+    if max_x <= min_x || max_y <= min_y {
+        return None;
+    }
+
+    let sample_columns = 18_usize;
+    let width_span = (max_x - min_x + 1).max(sample_columns);
+    let baseline_y = max_y;
+    let height_span = (max_y - min_y + 1).max(1);
+
+    let mut top_points = Vec::new();
+    let mut bottom_points = Vec::new();
+
+    for sample_index in 0..sample_columns {
+        let local_x = min_x + ((sample_index * width_span) / sample_columns).min(width_span - 1);
+        let column_range_end = (local_x + (width_span / sample_columns).max(1)).min(max_x + 1);
+
+        let mut top_hit: Option<usize> = None;
+        let mut bottom_hit: Option<usize> = None;
+
+        for x in local_x..column_range_end {
+            for y in min_y..=max_y {
+                if is_ink(*sheet.get_pixel(u32::try_from(x).ok()?, u32::try_from(y).ok()?)) {
+                    top_hit = Some(top_hit.map_or(y, |current| current.min(y)));
+                    bottom_hit = Some(bottom_hit.map_or(y, |current| current.max(y)));
+                }
+            }
+        }
+
+        let Some(top_y) = top_hit else {
+            continue;
+        };
+        let bottom_y = bottom_hit.unwrap_or(top_y);
+
+        let normalized_x = scale_to_units(local_x - min_x, width_span, 520) + 50;
+        let normalized_top = scale_y_to_units(baseline_y.saturating_sub(top_y), height_span);
+        let normalized_bottom = scale_y_to_units(baseline_y.saturating_sub(bottom_y), height_span);
+
+        top_points.push((normalized_x, normalized_top));
+        bottom_points.push((normalized_x, normalized_bottom.max(0)));
+    }
+
+    if top_points.len() < 4 {
+        return None;
+    }
+
+    bottom_points.reverse();
+    top_points.extend(bottom_points);
+
+    Some(top_points)
+}
+
+const fn is_ink(pixel: Luma<u8>) -> bool {
+    pixel.0[0] < 210
+}
+
+fn scale_to_units(value: usize, full_span: usize, target_span: i16) -> i16 {
+    if full_span == 0 {
+        return 0;
+    }
+
+    let numerator = i32::try_from(value).unwrap_or(0) * i32::from(target_span);
+    let denominator = i32::try_from(full_span).unwrap_or(1);
+    clamp_i32_to_i16(numerator / denominator)
+}
+
+fn scale_y_to_units(value: usize, full_span: usize) -> i16 {
+    scale_to_units(value, full_span, 700)
 }
 
 fn build_simple_polygon_glyph(
