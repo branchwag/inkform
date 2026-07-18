@@ -323,7 +323,7 @@ fn build_glyph_shapes(
         // The sample defines style. The grammar supplies legible topology for
         // glyphs that cannot appear in an arbitrary freeform upload.
         let style = glyph_style(style_profile, hinted_shape);
-        let advance_width = glyph_advance_width(
+        let provisional_advance_width = glyph_advance_width(
             candidate,
             style,
             transcript_hint
@@ -336,7 +336,23 @@ fn build_glyph_shapes(
         let mut contours = literal_contours
             .or_else(|| build_glyph_from_grammar(candidate, style, seed))
             .filter(|contours| !contours.is_empty())
-            .unwrap_or_else(|| algorithmic_contours(candidate, advance_width, seed, style_profile));
+            .unwrap_or_else(|| {
+                algorithmic_contours(candidate, provisional_advance_width, seed, style_profile)
+            });
+        let left_side_bearing = if candidate == ' ' {
+            0
+        } else if style.cursive_score >= 0.68 && candidate.is_alphabetic() {
+            12
+        } else {
+            32
+        };
+        normalize_contours_to_left_bearing(&mut contours, left_side_bearing);
+        let advance_width = measured_advance_width(
+            provisional_advance_width,
+            &contours,
+            transcript_hint.is_some(),
+            style,
+        );
         if supports_cursive_join(candidate)
             && let Some(terminal) = cursive_join_attachment(&contours, style)
             && let Some(join_stroke) = build_cursive_join_stroke(style, advance_width, terminal)
@@ -346,18 +362,45 @@ fn build_glyph_shapes(
         generated.push(GeneratedGlyph {
             character: candidate,
             advance_width,
-            left_side_bearing: if candidate == ' ' {
-                0
-            } else if style.cursive_score >= 0.68 && candidate.is_alphabetic() {
-                12
-            } else {
-                32
-            },
+            left_side_bearing,
             contours,
         });
     }
 
     generated
+}
+
+fn normalize_contours_to_left_bearing(contours: &mut [Vec<(i16, i16)>], left_side_bearing: i16) {
+    let Some(current_minimum) = contours.iter().flatten().map(|(x, _)| *x).min() else {
+        return;
+    };
+    let offset = i32::from(left_side_bearing) - i32::from(current_minimum);
+
+    for contour in contours {
+        for point in contour {
+            point.0 = clamp_i32_to_i16(i32::from(point.0) + offset);
+        }
+    }
+}
+
+fn measured_advance_width(
+    proposed_advance_width: u16,
+    contours: &[Vec<(i16, i16)>],
+    has_transcript_hint: bool,
+    style: GlyphStyle,
+) -> u16 {
+    if !has_transcript_hint {
+        return proposed_advance_width;
+    }
+
+    let Some(rightmost_ink) = contours.iter().flatten().map(|(x, _)| *x).max() else {
+        return proposed_advance_width;
+    };
+    let trailing_allowance = if style.cursive_score >= 0.68 { 18 } else { 28 };
+    let measured = i32::from(rightmost_ink) + trailing_allowance;
+    let bounded = measured.clamp(120, i32::from(u16::MAX));
+
+    proposed_advance_width.min(u16::try_from(bounded).map_or(u16::MAX, |value| value))
 }
 
 fn style_hint_for_character(
@@ -1268,16 +1311,21 @@ fn glyph_advance_width(
         // Preserve the observed character width and its surrounding breathing
         // room. This is more faithful than a fixed Latin advance for a word
         // whose letters are tightly joined or deliberately spread apart.
-        let stroke_allowance = style.stroke_width.mul_add(1.5, 80.0);
+        let stroke_allowance = style.stroke_width.mul_add(0.9, 44.0);
         (style.body_height * width_ratio)
             .mul_add(1.25, stroke_allowance)
-            .clamp(280.0, 860.0)
+            .clamp(210.0, 860.0)
     });
     let advance_width = sample_width.map_or(styled_width, |sample_width| {
-        styled_width.mul_add(0.35, sample_width * 0.65)
+        styled_width.mul_add(0.2, sample_width * 0.8)
     });
 
-    advance_width.round().clamp(280.0, 860.0) as u16
+    let minimum_advance = if transcript_width_ratio.is_some() {
+        210.0
+    } else {
+        280.0
+    };
+    advance_width.round().clamp(minimum_advance, 860.0) as u16
 }
 
 const fn base_glyph_advance_width(character: char) -> u16 {

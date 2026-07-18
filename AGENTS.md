@@ -55,6 +55,9 @@
 - When transcript alignment succeeds, use the aligned character width as the primary advance-width
   signal. Blend it with the bounded script default only to keep unseen or noisy samples legible;
   do not use a fixed Latin tracking value for every upload
+- Normalize generated contours to their configured left bearing before calculating a transcript-
+  aligned advance. Use a small bounded trailing allowance so loops remain distinct without
+  reintroducing generic side margins
 - Strong-cursive grammar uses connected or overlapping strokes for `k`, `m`, `n`, and `r`, gives
   `f` both ascender and descender loops, and keeps synthetic exit strokes off `m`, `n`, and `r`;
   capital `I` includes top and bottom crossbars. Avoid retracing a stem in one outline because it
