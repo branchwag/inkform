@@ -52,9 +52,10 @@
 - Literal transcript anchors must pass centerline continuity and character-topology checks before
   replay. Closed counters, dotted letters, crossed letters, and multi-stroke letters otherwise
   fall back to the legible grammar while retaining the upload's global style
-- Strong-cursive grammar keeps `k`, `m`, `n`, and `r` as single pen trajectories, gives `f` both
-  ascender and descender loops, and keeps synthetic exit strokes off `n` and `r`; capital `I`
-  includes top and bottom crossbars
+- Strong-cursive grammar uses connected or overlapping strokes for `k`, `m`, `n`, and `r`, gives
+  `f` both ascender and descender loops, and keeps synthetic exit strokes off `n` and `r`; capital
+  `I` includes top and bottom crossbars. Avoid retracing a stem in one outline because it pinches
+  the generated glyph
 - A real `Hello!` sample can produce overlapping connected-stroke regions plus separate
   punctuation strokes. Preserve the transcript-aligned segmentation confidence checks; never map
   raw components monotonically to characters

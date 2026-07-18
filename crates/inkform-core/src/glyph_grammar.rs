@@ -1292,36 +1292,37 @@ const fn looped_recipes_for_character(character: char) -> Option<&'static [Strok
                 thickness_scale: 0.56,
             },
         ]),
-        'k' => Some(&[StrokeRecipe {
-            // Keep the ascender, upper arm, and lower arm in one pen motion,
-            // matching connected cursive rather than assembling a print `k`.
-            points: &[
-                (135.0, 15.0),
-                (140.0, 760.0),
-                (150.0, 395.0),
-                (325.0, 555.0),
-                (235.0, 355.0),
-                (390.0, 20.0),
-            ],
-            closed: false,
-            thickness_scale: 0.84,
-        }]),
-        'm' => Some(&[StrokeRecipe {
-            points: &[
-                (115.0, 20.0),
-                (125.0, 415.0),
-                (205.0, 320.0),
-                (250.0, 175.0),
-                (305.0, 315.0),
-                (340.0, 420.0),
-                (405.0, 325.0),
-                (445.0, 175.0),
-                (500.0, 315.0),
-                (515.0, 20.0),
-            ],
-            closed: false,
-            thickness_scale: 0.78,
-        }]),
+        'k' => Some(&[
+            StrokeRecipe {
+                points: &[(135.0, 15.0), (140.0, 760.0)],
+                closed: false,
+                thickness_scale: 0.88,
+            },
+            // The arm begins on the stem, so the outlines overlap visibly,
+            // but avoiding a retraced stem prevents a pinched, distorted bowl.
+            StrokeRecipe {
+                points: &[
+                    (140.0, 395.0),
+                    (320.0, 555.0),
+                    (230.0, 350.0),
+                    (390.0, 20.0),
+                ],
+                closed: false,
+                thickness_scale: 0.76,
+            },
+        ]),
+        'm' => Some(&[
+            StrokeRecipe {
+                points: &[(115.0, 20.0), (125.0, 415.0), (205.0, 325.0), (275.0, 20.0)],
+                closed: false,
+                thickness_scale: 0.78,
+            },
+            StrokeRecipe {
+                points: &[(275.0, 20.0), (285.0, 415.0), (365.0, 325.0), (435.0, 20.0)],
+                closed: false,
+                thickness_scale: 0.78,
+            },
+        ]),
         'n' => Some(&[StrokeRecipe {
             points: &[
                 (135.0, 20.0),
@@ -1770,13 +1771,17 @@ mod tests {
     };
 
     #[test]
-    fn cursive_variants_keep_connected_letters_in_one_trajectory() {
-        for character in ['k', 'm', 'n', 'r'] {
+    fn cursive_variants_use_deliberate_connected_stroke_layouts() {
+        for (character, expected_contours) in [('k', 2), ('m', 2), ('n', 1), ('r', 1)] {
             let Some(contours) = build_glyph_from_grammar(character, CURSIVE_STYLE, 7) else {
                 panic!("missing grammar for {character}");
             };
 
-            assert_eq!(contours.len(), 1, "{character} should remain connected");
+            assert_eq!(
+                contours.len(),
+                expected_contours,
+                "unexpected {character} topology"
+            );
         }
     }
 
