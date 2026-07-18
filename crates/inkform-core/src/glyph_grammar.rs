@@ -1267,6 +1267,50 @@ const fn recipes_for_character(character: char) -> Option<&'static [StrokeRecipe
 #[allow(clippy::too_many_lines)]
 const fn looped_recipes_for_character(character: char) -> Option<&'static [StrokeRecipe]> {
     match character {
+        'H' => Some(&[
+            StrokeRecipe {
+                // Preserve the broad incoming swash before the capital's
+                // descending left stroke.
+                points: &[
+                    (45.0, 535.0),
+                    (105.0, 485.0),
+                    (190.0, 545.0),
+                    (315.0, 760.0),
+                    (225.0, 415.0),
+                    (105.0, 15.0),
+                ],
+                closed: false,
+                thickness_scale: 0.9,
+            },
+            StrokeRecipe {
+                points: &[
+                    (205.0, 350.0),
+                    (320.0, 500.0),
+                    (390.0, 405.0),
+                    (400.0, 20.0),
+                ],
+                closed: false,
+                thickness_scale: 0.78,
+            },
+        ]),
+        'e' => Some(&[StrokeRecipe {
+            // A compact, continuous loop is more legible for cursive samples
+            // than the print-style cross stroke used by the fallback recipe.
+            points: &[
+                (355.0, 225.0),
+                (280.0, 325.0),
+                (180.0, 310.0),
+                (140.0, 220.0),
+                (180.0, 120.0),
+                (280.0, 105.0),
+                (355.0, 165.0),
+                (330.0, 235.0),
+                (215.0, 235.0),
+                (400.0, 190.0),
+            ],
+            closed: false,
+            thickness_scale: 0.74,
+        }]),
         'f' => Some(&[StrokeRecipe {
             points: &[
                 (75.0, 35.0),
@@ -1798,5 +1842,18 @@ mod tests {
 
         assert_eq!(contours.len(), 1);
         assert!(contours[0].iter().any(|(_, y)| *y < -100));
+    }
+
+    #[test]
+    fn cursive_h_preserves_an_entry_swash_and_e_stays_a_single_loop() {
+        let Some(h_contours) = build_glyph_from_grammar('H', CURSIVE_STYLE, 7) else {
+            panic!("missing grammar for capital H");
+        };
+        let Some(e_contours) = build_glyph_from_grammar('e', CURSIVE_STYLE, 7) else {
+            panic!("missing grammar for e");
+        };
+
+        assert_eq!(h_contours.len(), 2);
+        assert_eq!(e_contours.len(), 1);
     }
 }

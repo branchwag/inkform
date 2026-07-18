@@ -62,6 +62,8 @@
   `f` both ascender and descender loops, and keeps synthetic exit strokes off `m`, `n`, and `r`;
   capital `I` includes top and bottom crossbars. Avoid retracing a stem in one outline because it
   pinches the generated glyph
+- Strong-cursive capital `H` preserves an entering left swash, while cursive `e` uses one compact
+  continuous loop with no synthetic exit stroke; this avoids the unreadable crossed-counter shape
 - A real `Hello!` sample can produce overlapping connected-stroke regions plus separate
   punctuation strokes. Preserve the transcript-aligned segmentation confidence checks; never map
   raw components monotonically to characters
