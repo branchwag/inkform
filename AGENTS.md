@@ -102,8 +102,14 @@
 
 - [ ] Runnable app deployed to a public URL
 - [ ] Public repo URL ready for judging
+- [ ] If the repository remains private, grant `testing@devpost.com` and
+  `build-week-event@openai.com` access before the submission deadline
+- [ ] Start and maintain the editable Devpost submission before the deadline
+- [ ] Confirm every teammate has accepted their Devpost project invitation
 - [ ] README includes Codex collaboration details
 - [ ] Demo video stays under 3 minutes
+- [ ] Demo video clearly shows the product and the Codex/GPT-5.6 contribution
+- [ ] Verify the final video link in a private/incognito browser session; unlisted is acceptable
 - [ ] `/feedback` session ID captured from the main Codex build thread
 - [ ] Build-week commit history clearly shows July 13-21, 2026 work
 
