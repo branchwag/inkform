@@ -57,6 +57,31 @@ pub fn build_glyph_from_grammar(
     Some(contours)
 }
 
+#[must_use]
+pub fn build_cursive_join_stroke(
+    style: GlyphStyle,
+    advance_width: u16,
+    terminal: (i16, i16),
+) -> Option<Vec<(i16, i16)>> {
+    if style.cursive_score < 0.68 || advance_width < 180 {
+        return None;
+    }
+
+    let advance = f32::from(advance_width);
+    let start_x = f32::from(terminal.0);
+    let start_y = f32::from(terminal.1);
+    let baseline = style.baseline_lift + 26.0;
+    let points = [
+        (start_x, start_y),
+        ((start_x + advance) * 0.5, baseline + 16.0),
+        (advance + 42.0, baseline + 12.0),
+    ];
+    let thickness = (style.stroke_width * 0.3).max(11.0);
+    render_open_stroke(&points, thickness, style.cursive_score)
+        .into_iter()
+        .next()
+}
+
 const fn decompose_character(character: char) -> (char, &'static [Accent]) {
     match character {
         'Ä' => ('A', &[Accent::Diaeresis]),

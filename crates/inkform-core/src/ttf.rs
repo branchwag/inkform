@@ -1,6 +1,6 @@
 use crate::domain::{GlyphCandidate, SampleImage, ScriptPack};
 use crate::extraction::{ExtractionResult, extract_handwriting_with_transcript};
-use crate::glyph_grammar::{GlyphStyle, build_glyph_from_grammar};
+use crate::glyph_grammar::{GlyphStyle, build_cursive_join_stroke, build_glyph_from_grammar};
 use image::{GrayImage, ImageReader, Luma};
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -325,7 +325,7 @@ fn build_glyph_shapes(
         // glyphs that cannot appear in an arbitrary freeform upload.
         let style = glyph_style(style_profile, hinted_shape);
         let advance_width = glyph_advance_width(candidate, style);
-        let contours = transcript_anchors
+        let mut contours = transcript_anchors
             .get(&candidate)
             .and_then(|shape| remix_shape_outline(shape, candidate, style_profile, seed))
             .map_or_else(
@@ -338,15 +338,37 @@ fn build_glyph_shapes(
                 },
                 |outline| vec![outline],
             );
+        if candidate.is_alphabetic()
+            && let Some(terminal) = cursive_join_attachment(&contours, style)
+            && let Some(join_stroke) = build_cursive_join_stroke(style, advance_width, terminal)
+        {
+            contours.push(join_stroke);
+        }
         generated.push(GeneratedGlyph {
             character: candidate,
             advance_width,
-            left_side_bearing: if candidate == ' ' { 0 } else { 32 },
+            left_side_bearing: if candidate == ' ' {
+                0
+            } else if style.cursive_score >= 0.68 && candidate.is_alphabetic() {
+                12
+            } else {
+                32
+            },
             contours,
         });
     }
 
     generated
+}
+
+fn cursive_join_attachment(contours: &[Vec<(i16, i16)>], style: GlyphStyle) -> Option<(i16, i16)> {
+    let baseline = round_to_i16(style.baseline_lift + 26.0);
+    let tolerance = 130_u32;
+    contours
+        .iter()
+        .flat_map(|contour| contour.iter().copied())
+        .filter(|(_, y)| (i32::from(*y) - i32::from(baseline)).unsigned_abs() <= tolerance)
+        .max_by_key(|(x, _)| *x)
 }
 
 fn build_glyph_definitions_from_generated(
@@ -1018,7 +1040,7 @@ fn glyph_advance_width(character: char, style: GlyphStyle) -> u16 {
         return 310;
     }
 
-    let cursive_compaction = style.cursive_score.mul_add(-0.16, 0.96);
+    let cursive_compaction = style.cursive_score.mul_add(-0.24, 0.92);
     let styled_width = f32::from(base_width) * style.width_scale * cursive_compaction;
     styled_width.round().clamp(280.0, 860.0) as u16
 }
@@ -2132,6 +2154,7 @@ mod tests {
 
         assert_eq!(generated.len(), 1);
         let expected = expected.into_iter().collect::<Vec<_>>();
-        assert_eq!(generated[0].contours, expected);
+        assert_eq!(generated[0].contours.first(), expected.first());
+        assert!(generated[0].contours.len() > expected.len());
     }
 }
