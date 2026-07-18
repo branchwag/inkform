@@ -290,6 +290,7 @@ export function GeneratorWorkbench() {
                     unoptimized
                     width={1200}
                     height={320}
+                    className="inkform-preview-image"
                     style={{ display: "block", width: "100%", height: "auto" }}
                   />
                 ) : null}

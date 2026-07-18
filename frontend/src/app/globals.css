@@ -119,6 +119,10 @@ textarea::placeholder {
   font-size: 0.76rem;
 }
 
+:root[data-theme="dark"] .inkform-preview-image {
+  filter: invert(0.86) hue-rotate(180deg) saturate(0.62) brightness(0.78);
+}
+
 @media (max-width: 640px) {
   .theme-toggle {
     top: 0.7rem;
