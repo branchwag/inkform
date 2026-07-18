@@ -1,5 +1,6 @@
 mod domain;
 mod error;
+mod extraction;
 mod generation;
 mod preview;
 mod ttf;

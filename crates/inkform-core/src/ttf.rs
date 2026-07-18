@@ -1,5 +1,7 @@
 use crate::domain::{GlyphCandidate, SampleImage, ScriptPack};
+use crate::extraction::{ExtractionResult, extract_handwriting};
 use image::{GrayImage, ImageReader, Luma};
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 
 const UNITS_PER_EM: u16 = 1000;
@@ -26,6 +28,34 @@ struct TableRecord {
     data: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct StyleProfile {
+    slant: f32,
+    width_scale: f32,
+    body_height: f32,
+    ascender_height: f32,
+    descender_depth: f32,
+    stroke_width: f32,
+    waviness: f32,
+    baseline_lift: f32,
+}
+
+#[derive(Debug, Clone)]
+struct ExtractedShape {
+    outline: Vec<(i16, i16)>,
+    measures: ComponentMeasures,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StyleEmbedding {
+    width_ratio: f32,
+    height_ratio: f32,
+    slant: f32,
+    density: f32,
+    baseline_offset: f32,
+    ink_area: f32,
+}
+
 pub fn build_ttf(
     family_name: &str,
     sample_image: &SampleImage,
@@ -33,9 +63,15 @@ pub fn build_ttf(
     glyphs: &[GlyphCandidate],
 ) -> Vec<u8> {
     let base_seed = hash_bytes(&sample_image.bytes);
+    let extraction_result = extract_handwriting(sample_image);
     let decoded_sheet = decode_sheet(sample_image);
-    let glyph_definitions =
-        build_glyph_definitions(base_seed, script_pack, glyphs, decoded_sheet.as_ref());
+    let glyph_definitions = build_glyph_definitions(
+        base_seed,
+        script_pack,
+        glyphs,
+        decoded_sheet.as_ref(),
+        extraction_result.as_ref(),
+    );
 
     let metrics = FontMetrics::from_glyphs(&glyph_definitions);
     let head = build_head_table(metrics);
@@ -166,7 +202,29 @@ fn build_glyph_definitions(
     script_pack: &ScriptPack,
     glyphs: &[GlyphCandidate],
     decoded_sheet: Option<&GrayImage>,
+    extraction_result: Option<&ExtractionResult>,
 ) -> Vec<GlyphDefinition> {
+    let extracted_shapes = extraction_result.map_or_else(
+        || decoded_sheet.map(extract_shape_library).unwrap_or_default(),
+        |result| {
+            result
+                .glyphs
+                .iter()
+                .map(|glyph| ExtractedShape {
+                    outline: glyph.outline.clone(),
+                    measures: ComponentMeasures {
+                        width_ratio: glyph.width_ratio,
+                        height_ratio: glyph.height_ratio,
+                        slant: glyph.slant,
+                        density: glyph.density,
+                        baseline_offset: glyph.baseline_offset,
+                        ink_area: glyph.ink_area,
+                    },
+                })
+                .collect::<Vec<_>>()
+        },
+    );
+    let style_profile = derive_style_profile(decoded_sheet, &extracted_shapes);
     let mut definitions = Vec::with_capacity(glyphs.len() + 1);
     definitions.push(notdef_glyph());
 
@@ -175,12 +233,23 @@ fn build_glyph_definitions(
             .get(glyph_index)
             .map_or(*character, |glyph| glyph.character);
         let seed = mix_seed(base_seed, *character);
-        let extracted_glyph = decoded_sheet.and_then(|sheet| {
-            extract_grid_glyph(sheet, glyph_index)
-                .or_else(|| extract_freeform_glyph(sheet, glyph_index, script_pack.glyph_count()))
+        let extracted_glyph = select_remixed_shape(
+            &extracted_shapes,
+            candidate,
+            glyph_index,
+            script_pack.glyph_count(),
+            style_profile,
+            seed,
+        )
+        .or_else(|| {
+            decoded_sheet.and_then(|sheet| {
+                extract_grid_glyph(sheet, glyph_index).or_else(|| {
+                    extract_freeform_glyph(sheet, glyph_index, script_pack.glyph_count())
+                })
+            })
         });
         definitions.push(extracted_glyph.map_or_else(
-            || build_algorithmic_glyph(candidate, seed),
+            || build_algorithmic_glyph(candidate, seed, style_profile),
             |points| build_simple_polygon_glyph(glyph_advance_width(candidate), 32, &points),
         ));
     }
@@ -193,7 +262,546 @@ fn notdef_glyph() -> GlyphDefinition {
     build_simple_polygon_glyph(600, 40, &points)
 }
 
-fn build_algorithmic_glyph(character: char, seed: u64) -> GlyphDefinition {
+fn derive_style_profile(
+    decoded_sheet: Option<&GrayImage>,
+    extracted_shapes: &[ExtractedShape],
+) -> StyleProfile {
+    let default = StyleProfile {
+        slant: 44.0,
+        width_scale: 1.0,
+        body_height: 360.0,
+        ascender_height: 650.0,
+        descender_depth: 180.0,
+        stroke_width: 54.0,
+        waviness: 28.0,
+        baseline_lift: 18.0,
+    };
+
+    if !extracted_shapes.is_empty() {
+        return derive_style_profile_from_shapes(extracted_shapes).unwrap_or(default);
+    }
+
+    let Some(sheet) = decoded_sheet else {
+        return default;
+    };
+
+    let Ok(sheet_width) = usize::try_from(sheet.width()) else {
+        return default;
+    };
+    let Ok(sheet_height) = usize::try_from(sheet.height()) else {
+        return default;
+    };
+
+    let Some(components) = extract_ink_components(sheet, sheet_width, sheet_height) else {
+        return default;
+    };
+    if components.is_empty() {
+        return default;
+    }
+
+    let mut width_ratios = Vec::new();
+    let mut slants = Vec::new();
+    let mut densities = Vec::new();
+    let mut baseline_offsets = Vec::new();
+
+    for component in &components {
+        let Some(measures) = measure_component(component) else {
+            continue;
+        };
+        width_ratios.push(measures.width_ratio);
+        slants.push(measures.slant);
+        densities.push(measures.density);
+        baseline_offsets.push(measures.baseline_offset);
+    }
+
+    if width_ratios.is_empty() {
+        return default;
+    }
+
+    let average_width_ratio = average(&width_ratios);
+    let average_slant = average(&slants);
+    let average_density = average(&densities);
+    let average_baseline_offset = average(&baseline_offsets);
+
+    StyleProfile {
+        slant: clamp_f32(average_slant * 220.0, -110.0, 140.0),
+        width_scale: clamp_f32(average_width_ratio.mul_add(0.75, 0.82), 0.72, 1.35),
+        body_height: clamp_f32(average_density.mul_add(140.0, 300.0), 290.0, 430.0),
+        ascender_height: clamp_f32(average_width_ratio.mul_add(170.0, 560.0), 520.0, 760.0),
+        descender_depth: clamp_f32(average_baseline_offset.mul_add(320.0, 120.0), 90.0, 240.0),
+        stroke_width: clamp_f32(average_density.mul_add(88.0, 34.0), 28.0, 110.0),
+        waviness: clamp_f32((1.0 - average_density).mul_add(54.0, 14.0), 12.0, 64.0),
+        baseline_lift: clamp_f32(average_baseline_offset * 64.0, -18.0, 72.0),
+    }
+}
+
+fn derive_style_profile_from_shapes(extracted_shapes: &[ExtractedShape]) -> Option<StyleProfile> {
+    if extracted_shapes.is_empty() {
+        return None;
+    }
+
+    let mut width_ratios = Vec::with_capacity(extracted_shapes.len());
+    let mut slants = Vec::with_capacity(extracted_shapes.len());
+    let mut densities = Vec::with_capacity(extracted_shapes.len());
+    let mut baseline_offsets = Vec::with_capacity(extracted_shapes.len());
+
+    for shape in extracted_shapes {
+        width_ratios.push(shape.measures.width_ratio);
+        slants.push(shape.measures.slant);
+        densities.push(shape.measures.density);
+        baseline_offsets.push(shape.measures.baseline_offset);
+    }
+
+    let average_width_ratio = average(&width_ratios);
+    let average_slant = average(&slants);
+    let average_density = average(&densities);
+    let average_baseline_offset = average(&baseline_offsets);
+
+    Some(StyleProfile {
+        slant: clamp_f32(average_slant * 220.0, -110.0, 140.0),
+        width_scale: clamp_f32(average_width_ratio.mul_add(0.75, 0.82), 0.72, 1.35),
+        body_height: clamp_f32(average_density.mul_add(140.0, 300.0), 290.0, 430.0),
+        ascender_height: clamp_f32(average_width_ratio.mul_add(170.0, 560.0), 520.0, 760.0),
+        descender_depth: clamp_f32(average_baseline_offset.mul_add(320.0, 120.0), 90.0, 240.0),
+        stroke_width: clamp_f32(average_density.mul_add(88.0, 34.0), 28.0, 110.0),
+        waviness: clamp_f32((1.0 - average_density).mul_add(54.0, 14.0), 12.0, 64.0),
+        baseline_lift: clamp_f32(average_baseline_offset * 64.0, -18.0, 72.0),
+    })
+}
+
+fn extract_shape_library(sheet: &GrayImage) -> Vec<ExtractedShape> {
+    let Ok(sheet_width) = usize::try_from(sheet.width()) else {
+        return Vec::new();
+    };
+    let Ok(sheet_height) = usize::try_from(sheet.height()) else {
+        return Vec::new();
+    };
+
+    let Some(components) = extract_ink_components(sheet, sheet_width, sheet_height) else {
+        return Vec::new();
+    };
+
+    let mut shapes = components
+        .iter()
+        .filter_map(|component| {
+            let measures = measure_component(component)?;
+            let outline = build_shape_from_points(component)?;
+            Some(ExtractedShape { outline, measures })
+        })
+        .collect::<Vec<_>>();
+
+    shapes.sort_by(|left, right| {
+        left.measures
+            .ink_area
+            .partial_cmp(&right.measures.ink_area)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    shapes
+}
+
+fn select_remixed_shape(
+    shapes: &[ExtractedShape],
+    character: char,
+    glyph_index: usize,
+    _glyph_count: usize,
+    style_profile: StyleProfile,
+    seed: u64,
+) -> Option<Vec<(i16, i16)>> {
+    let shape = select_shape_for_glyph(shapes, character, glyph_index, seed)?;
+    remix_shape_outline(shape, character, style_profile, seed)
+}
+
+fn select_shape_for_glyph(
+    shapes: &[ExtractedShape],
+    character: char,
+    glyph_index: usize,
+    seed: u64,
+) -> Option<&ExtractedShape> {
+    if shapes.is_empty() {
+        return None;
+    }
+
+    let target_embedding = target_embedding(character);
+    let mut ranked_shapes = shapes
+        .iter()
+        .enumerate()
+        .map(|(index, shape)| {
+            let distance = embedding_distance(target_embedding, shape_embedding(shape));
+            (index, shape, distance)
+        })
+        .collect::<Vec<_>>();
+
+    ranked_shapes.sort_by(|left, right| left.2.total_cmp(&right.2));
+    let shortlist_len = ranked_shapes.len().min(4);
+    let shortlist = &ranked_shapes[..shortlist_len];
+    let spread_seed = usize::try_from(seed & 0xFFFF).unwrap_or(0);
+    let selected_index = (glyph_index + spread_seed) % shortlist.len().max(1);
+    shortlist.get(selected_index).map(|(_, shape, _)| *shape)
+}
+
+const fn shape_embedding(shape: &ExtractedShape) -> StyleEmbedding {
+    StyleEmbedding {
+        width_ratio: shape.measures.width_ratio,
+        height_ratio: shape.measures.height_ratio,
+        slant: shape.measures.slant,
+        density: shape.measures.density,
+        baseline_offset: shape.measures.baseline_offset,
+        ink_area: shape.measures.ink_area,
+    }
+}
+
+fn target_embedding(character: char) -> StyleEmbedding {
+    match classify_glyph(character) {
+        GlyphKind::Uppercase => StyleEmbedding {
+            width_ratio: 0.72,
+            height_ratio: 1.38,
+            slant: 0.06,
+            density: 0.34,
+            baseline_offset: 0.08,
+            ink_area: 0.038,
+        },
+        GlyphKind::Lowercase => StyleEmbedding {
+            width_ratio: 0.86,
+            height_ratio: 1.04,
+            slant: 0.08,
+            density: 0.3,
+            baseline_offset: 0.1,
+            ink_area: 0.046,
+        },
+        GlyphKind::Descender => StyleEmbedding {
+            width_ratio: 0.82,
+            height_ratio: 1.24,
+            slant: 0.09,
+            density: 0.31,
+            baseline_offset: 0.28,
+            ink_area: 0.05,
+        },
+        GlyphKind::Digit => StyleEmbedding {
+            width_ratio: 0.78,
+            height_ratio: 1.14,
+            slant: 0.04,
+            density: 0.36,
+            baseline_offset: 0.1,
+            ink_area: 0.044,
+        },
+        GlyphKind::Punctuation => StyleEmbedding {
+            width_ratio: 0.38,
+            height_ratio: 0.56,
+            slant: 0.03,
+            density: 0.24,
+            baseline_offset: 0.06,
+            ink_area: 0.014,
+        },
+    }
+}
+
+fn embedding_distance(left: StyleEmbedding, right: StyleEmbedding) -> f32 {
+    let width_delta = (left.width_ratio - right.width_ratio).abs() * 1.7;
+    let height_delta = (left.height_ratio - right.height_ratio).abs() * 1.4;
+    let slant_delta = (left.slant - right.slant).abs() * 2.2;
+    let density_delta = (left.density - right.density).abs() * 1.5;
+    let baseline_delta = (left.baseline_offset - right.baseline_offset).abs() * 1.8;
+    let ink_area_delta = (left.ink_area - right.ink_area).abs() * 2.1;
+
+    width_delta + height_delta + slant_delta + density_delta + baseline_delta + ink_area_delta
+}
+
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+fn remix_shape_outline(
+    shape: &ExtractedShape,
+    character: char,
+    style_profile: StyleProfile,
+    seed: u64,
+) -> Option<Vec<(i16, i16)>> {
+    let glyph_kind = classify_glyph(character);
+    let target_width = f32::from(glyph_advance_width(character)) - 110.0;
+    let width_scale = match glyph_kind {
+        GlyphKind::Uppercase => 1.08,
+        GlyphKind::Lowercase => 0.94,
+        GlyphKind::Descender => 0.98,
+        GlyphKind::Digit => 0.9,
+        GlyphKind::Punctuation => 0.45,
+    };
+    let height_scale = match glyph_kind {
+        GlyphKind::Uppercase => style_profile.ascender_height / 700.0,
+        GlyphKind::Lowercase => style_profile.body_height / 520.0,
+        GlyphKind::Descender => (style_profile.body_height + style_profile.descender_depth) / 700.0,
+        GlyphKind::Digit => (style_profile.body_height + 140.0) / 700.0,
+        GlyphKind::Punctuation => 0.42,
+    };
+    let baseline_drop = match glyph_kind {
+        GlyphKind::Descender => -style_profile.descender_depth * 0.82,
+        GlyphKind::Punctuation => 42.0,
+        _ => style_profile.baseline_lift,
+    };
+    let jitter_amount = style_profile.waviness * 0.24;
+
+    let transformed = shape
+        .outline
+        .iter()
+        .enumerate()
+        .map(|(index, (x, y))| {
+            let normalized_x = f32::from(*x) - 310.0;
+            let normalized_y = f32::from(*y);
+            let jitter_channel = 40_u32 + u32::try_from(index).unwrap_or(0);
+            let jitter = random_unit(seed, jitter_channel) * jitter_amount;
+            let scaled_x = (normalized_x * width_scale).mul_add(
+                style_profile.width_scale,
+                style_profile
+                    .slant
+                    .mul_add(normalized_y / 700.0, target_width * 0.5),
+            ) + jitter;
+            let scaled_y = normalized_y.mul_add(height_scale, baseline_drop) + jitter;
+
+            (
+                round_to_i16(clamp_f32(scaled_x + 40.0, 30.0, target_width + 70.0)),
+                round_to_i16(clamp_f32(scaled_y, -260.0, 780.0)),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    if transformed.len() < 4 {
+        return None;
+    }
+
+    Some(transformed)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ComponentMeasures {
+    width_ratio: f32,
+    height_ratio: f32,
+    slant: f32,
+    density: f32,
+    baseline_offset: f32,
+    ink_area: f32,
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn measure_component(points: &[(usize, usize)]) -> Option<ComponentMeasures> {
+    let min_x = points.iter().map(|(x, _)| *x).min()?;
+    let max_x = points.iter().map(|(x, _)| *x).max()?;
+    let min_y = points.iter().map(|(_, y)| *y).min()?;
+    let max_y = points.iter().map(|(_, y)| *y).max()?;
+
+    let width = (max_x - min_x + 1) as f32;
+    let height = (max_y - min_y + 1) as f32;
+    if width <= 1.0 || height <= 1.0 {
+        return None;
+    }
+
+    let top_cutoff = min_y + ((max_y - min_y) / 3);
+    let bottom_cutoff = max_y.saturating_sub((max_y - min_y) / 3);
+
+    let top_center = centroid_x(points.iter().copied().filter(|(_, y)| *y <= top_cutoff))?;
+    let bottom_center = centroid_x(points.iter().copied().filter(|(_, y)| *y >= bottom_cutoff))?;
+
+    let ink_count = points.len() as f32;
+    let box_area = width * height;
+    let density = if box_area > 0.0 {
+        ink_count / box_area
+    } else {
+        0.0
+    };
+
+    Some(ComponentMeasures {
+        width_ratio: width / height,
+        height_ratio: height / width.max(1.0),
+        slant: (top_center - bottom_center) / width,
+        density,
+        baseline_offset: (max_y.saturating_sub(bottom_cutoff)) as f32 / height,
+        ink_area: if box_area > 0.0 {
+            ink_count / box_area
+        } else {
+            0.0
+        },
+    })
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn centroid_x<I>(points: I) -> Option<f32>
+where
+    I: Iterator<Item = (usize, usize)>,
+{
+    let mut total = 0.0_f32;
+    let mut count = 0.0_f32;
+
+    for (x, _) in points {
+        total += x as f32;
+        count += 1.0;
+    }
+
+    if count <= 0.0 {
+        return None;
+    }
+
+    Some(total / count)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn average(values: &[f32]) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+
+    values.iter().copied().sum::<f32>() / (values.len() as f32)
+}
+
+const fn clamp_f32(value: f32, min: f32, max: f32) -> f32 {
+    value.max(min).min(max)
+}
+
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+fn build_handwritten_outline(
+    character: char,
+    advance_width: u16,
+    seed: u64,
+    style_profile: StyleProfile,
+) -> Vec<(i16, i16)> {
+    let glyph_kind = classify_glyph(character);
+    let left_margin = 44.0_f32;
+    let usable_width = (f32::from(advance_width) - 92.0) * style_profile.width_scale;
+    let body_top = style_profile.body_height + random_unit(seed, 0) * 24.0;
+    let baseline = style_profile.baseline_lift + random_unit(seed, 1) * 18.0;
+
+    let top_peak = match glyph_kind {
+        GlyphKind::Uppercase => style_profile.ascender_height,
+        GlyphKind::Digit => style_profile.body_height + 170.0,
+        GlyphKind::Descender => style_profile.body_height + 60.0,
+        GlyphKind::Punctuation => 240.0,
+        GlyphKind::Lowercase => body_top,
+    };
+    let bottom_depth = match glyph_kind {
+        GlyphKind::Descender => -style_profile.descender_depth,
+        GlyphKind::Punctuation => -18.0,
+        _ => baseline,
+    };
+
+    let centerline = [
+        (
+            left_margin + random_unit(seed, 2) * 18.0,
+            baseline + random_unit(seed, 3) * 12.0,
+        ),
+        (
+            left_margin + (usable_width * 0.18),
+            (body_top * 0.36) + random_unit(seed, 4) * style_profile.waviness,
+        ),
+        (
+            left_margin + (usable_width * 0.34),
+            top_peak + random_unit(seed, 5) * (style_profile.waviness * 0.8),
+        ),
+        (
+            left_margin + (usable_width * 0.54),
+            (body_top * 0.72) + random_unit(seed, 6) * style_profile.waviness,
+        ),
+        (
+            left_margin + (usable_width * 0.76),
+            (body_top * 0.46) + random_unit(seed, 7) * style_profile.waviness,
+        ),
+        (
+            left_margin + usable_width + random_unit(seed, 8) * 14.0,
+            bottom_depth + random_unit(seed, 9) * 18.0,
+        ),
+    ];
+
+    let mut top_edge = Vec::with_capacity(centerline.len());
+    let mut bottom_edge = Vec::with_capacity(centerline.len());
+
+    for (index, point) in centerline.iter().enumerate() {
+        let previous = if index == 0 {
+            *point
+        } else {
+            centerline[index - 1]
+        };
+        let next = if index + 1 >= centerline.len() {
+            *point
+        } else {
+            centerline[index + 1]
+        };
+
+        let tangent_x = next.0 - previous.0;
+        let tangent_y = next.1 - previous.1;
+        let length = tangent_x.hypot(tangent_y).max(1.0);
+        let normal_x = -tangent_y / length;
+        let normal_y = tangent_x / length;
+        let index_ratio = (index as f32) / (centerline.len() as f32);
+        let channel = 20_u32 + u32::try_from(index).unwrap_or(0);
+        let stroke = style_profile.stroke_width
+            * (index_ratio.mul_add(1.0, 0.72))
+            * random_unit(seed, channel).mul_add(0.18, 1.0);
+        let offset_x = normal_x * stroke;
+        let offset_y = normal_y * stroke;
+        let slanted_x = style_profile
+            .slant
+            .mul_add((point.1 - baseline) / 700.0, point.0);
+
+        top_edge.push((
+            round_to_i16(slanted_x + offset_x),
+            round_to_i16(point.1 + offset_y),
+        ));
+        bottom_edge.push((
+            round_to_i16(offset_x.mul_add(-0.78, slanted_x)),
+            round_to_i16(offset_y.mul_add(-0.78, point.1)),
+        ));
+    }
+
+    bottom_edge.reverse();
+    top_edge.extend(bottom_edge);
+    top_edge
+}
+
+#[derive(Debug, Clone, Copy)]
+enum GlyphKind {
+    Uppercase,
+    Lowercase,
+    Descender,
+    Digit,
+    Punctuation,
+}
+
+fn classify_glyph(character: char) -> GlyphKind {
+    if character.is_ascii_uppercase() {
+        return GlyphKind::Uppercase;
+    }
+
+    if character.is_ascii_digit() {
+        return GlyphKind::Digit;
+    }
+
+    if matches!(character, 'g' | 'j' | 'p' | 'q' | 'y') {
+        return GlyphKind::Descender;
+    }
+
+    if character.is_alphabetic() {
+        return GlyphKind::Lowercase;
+    }
+
+    GlyphKind::Punctuation
+}
+
+fn random_unit(seed: u64, channel: u32) -> f32 {
+    let value = seeded_unit(seed, channel);
+    value.mul_add(2.0, -1.0)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn seeded_unit(seed: u64, channel: u32) -> f32 {
+    let shifted = seed.rotate_left(channel % 63);
+    let masked = u16::try_from((shifted ^ u64::from(channel).wrapping_mul(0x9E37_79B9)) & 0xFFFF)
+        .unwrap_or(0);
+    f32::from(masked) / 65_535.0
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn round_to_i16(value: f32) -> i16 {
+    clamp_i32_to_i16(value.round() as i32)
+}
+
+fn build_algorithmic_glyph(
+    character: char,
+    seed: u64,
+    style_profile: StyleProfile,
+) -> GlyphDefinition {
     if character == ' ' {
         return GlyphDefinition {
             advance_width: 320,
@@ -207,23 +815,7 @@ fn build_algorithmic_glyph(character: char, seed: u64) -> GlyphDefinition {
     }
 
     let advance_width = glyph_advance_width(character);
-
-    let width_span = i16::try_from(advance_width).unwrap_or(720) - 120;
-    let x0 = 40 + seeded_range(seed, 0, 40);
-    let x1 = 24 + seeded_range(seed, 1, 60);
-    let x2 = 100 + seeded_range(seed, 2, 80);
-    let x3 = (width_span / 2) + seeded_range(seed, 3, 100);
-    let x4 = (width_span - 100) + seeded_range(seed, 4, 60);
-    let x5 = (width_span - 40) + seeded_range(seed, 5, 30);
-
-    let points = [
-        (x0, 0),
-        (x1, 120 + seeded_range(seed, 6, 120)),
-        (x2, 560 + seeded_range(seed, 7, 90)),
-        (x3, 690 - seeded_range(seed, 8, 60)),
-        (x4, 520 + seeded_range(seed, 9, 100)),
-        (x5, 0),
-    ];
+    let points = build_handwritten_outline(character, advance_width, seed, style_profile);
 
     build_simple_polygon_glyph(advance_width, 32, &points)
 }
@@ -355,78 +947,302 @@ fn extract_freeform_glyph(
         return None;
     }
 
+    let components = extract_ink_components(sheet, sheet_width, sheet_height)?;
+    if components.is_empty() {
+        return None;
+    }
+
+    let component_index = (glyph_index * components.len()) / glyph_count.max(1);
+    let points = components.get(component_index.min(components.len().saturating_sub(1)))?;
+    build_shape_from_points(points)
+}
+
+fn extract_ink_components(
+    sheet: &GrayImage,
+    sheet_width: usize,
+    sheet_height: usize,
+) -> Option<Vec<Vec<(usize, usize)>>> {
     let mut ink_points = Vec::new();
+    let mut visited = vec![false; sheet_width.checked_mul(sheet_height)?];
+
     for y in 0..sheet_height {
         for x in 0..sheet_width {
-            if is_ink(*sheet.get_pixel(u32::try_from(x).ok()?, u32::try_from(y).ok()?)) {
-                ink_points.push((x, y));
+            if !is_ink(*sheet.get_pixel(u32::try_from(x).ok()?, u32::try_from(y).ok()?)) {
+                continue;
+            }
+
+            let index = y.checked_mul(sheet_width)?.checked_add(x)?;
+            if visited.get(index).copied().unwrap_or(true) {
+                continue;
+            }
+
+            let component =
+                flood_fill_component(sheet, sheet_width, sheet_height, x, y, &mut visited)?;
+            if component.len() >= 24 {
+                ink_points.push(component);
             }
         }
     }
 
-    if ink_points.len() < 48 {
+    ink_points.sort_by_key(|points| {
+        let min_y = points.iter().map(|(_, y)| *y).min().unwrap_or(0);
+        let min_x = points.iter().map(|(x, _)| *x).min().unwrap_or(0);
+        (min_y / 24, min_x)
+    });
+
+    Some(ink_points)
+}
+
+fn flood_fill_component(
+    sheet: &GrayImage,
+    sheet_width: usize,
+    sheet_height: usize,
+    start_x: usize,
+    start_y: usize,
+    visited: &mut [bool],
+) -> Option<Vec<(usize, usize)>> {
+    let mut queue = std::collections::VecDeque::new();
+    let mut points = Vec::new();
+
+    queue.push_back((start_x, start_y));
+
+    while let Some((x, y)) = queue.pop_front() {
+        let index = y.checked_mul(sheet_width)?.checked_add(x)?;
+        if *visited.get(index)? {
+            continue;
+        }
+
+        visited[index] = true;
+        if !is_ink(*sheet.get_pixel(u32::try_from(x).ok()?, u32::try_from(y).ok()?)) {
+            continue;
+        }
+
+        points.push((x, y));
+
+        let x_start = x.saturating_sub(1);
+        let x_end = (x + 1).min(sheet_width.saturating_sub(1));
+        let y_start = y.saturating_sub(1);
+        let y_end = (y + 1).min(sheet_height.saturating_sub(1));
+
+        for next_y in y_start..=y_end {
+            for next_x in x_start..=x_end {
+                let next_index = next_y.checked_mul(sheet_width)?.checked_add(next_x)?;
+                if !visited.get(next_index).copied().unwrap_or(true) {
+                    queue.push_back((next_x, next_y));
+                }
+            }
+        }
+    }
+
+    Some(points)
+}
+
+fn build_shape_from_points(points: &[(usize, usize)]) -> Option<Vec<(i16, i16)>> {
+    if points.len() < 24 {
         return None;
     }
 
-    let min_x = ink_points.iter().map(|(x, _)| *x).min()?;
-    let max_x = ink_points.iter().map(|(x, _)| *x).max()?;
-    let min_y = ink_points.iter().map(|(_, y)| *y).min()?;
-    let max_y = ink_points.iter().map(|(_, y)| *y).max()?;
+    let outline = trace_component_outline(points)?;
+    let normalized_outline = normalize_outline_to_font(&outline)?;
+    if normalized_outline.len() < 4 {
+        return None;
+    }
+
+    Some(normalized_outline)
+}
+
+const fn is_ink(pixel: Luma<u8>) -> bool {
+    pixel.0[0] < 210
+}
+
+fn trace_component_outline(points: &[(usize, usize)]) -> Option<Vec<(usize, usize)>> {
+    type Vertex = (usize, usize);
+    type Edge = (Vertex, Vertex);
+
+    let occupied = points.iter().copied().collect::<HashSet<_>>();
+    if occupied.is_empty() {
+        return None;
+    }
+
+    let mut boundary_edges = HashSet::<Edge>::new();
+    for &(x, y) in &occupied {
+        let edges = [
+            ((x, y), (x + 1, y)),
+            ((x + 1, y), (x + 1, y + 1)),
+            ((x, y + 1), (x + 1, y + 1)),
+            ((x, y), (x, y + 1)),
+        ];
+
+        for edge in edges {
+            let canonical = canonical_edge(edge);
+            if !boundary_edges.insert(canonical) {
+                boundary_edges.remove(&canonical);
+            }
+        }
+    }
+
+    if boundary_edges.is_empty() {
+        return None;
+    }
+
+    let mut adjacency = HashMap::<Vertex, Vec<Vertex>>::new();
+    for &(start, end) in &boundary_edges {
+        adjacency.entry(start).or_default().push(end);
+        adjacency.entry(end).or_default().push(start);
+    }
+
+    let start = adjacency.keys().min().copied()?;
+    let mut outline = Vec::new();
+    let mut current = start;
+    let mut previous: Option<Vertex> = None;
+
+    loop {
+        outline.push(current);
+        let neighbors = adjacency.get(&current)?;
+        let next = if neighbors.len() == 1 {
+            neighbors[0]
+        } else {
+            choose_next_vertex(current, previous, neighbors)?
+        };
+
+        previous = Some(current);
+        current = next;
+
+        if current == start {
+            break;
+        }
+
+        if outline.len() > boundary_edges.len().saturating_mul(2) {
+            return None;
+        }
+    }
+
+    let simplified = remove_collinear_points(&outline);
+    if simplified.len() < 4 {
+        return None;
+    }
+
+    Some(resample_outline(&simplified, 160))
+}
+
+fn canonical_edge(edge: ((usize, usize), (usize, usize))) -> ((usize, usize), (usize, usize)) {
+    if edge.0 <= edge.1 {
+        edge
+    } else {
+        (edge.1, edge.0)
+    }
+}
+
+fn choose_next_vertex(
+    current: (usize, usize),
+    previous: Option<(usize, usize)>,
+    neighbors: &[(usize, usize)],
+) -> Option<(usize, usize)> {
+    if previous.is_none() {
+        return neighbors.iter().copied().min_by_key(|neighbor| {
+            let dx = neighbor.0.abs_diff(current.0);
+            let dy = neighbor.1.abs_diff(current.1);
+            (dy, dx, *neighbor)
+        });
+    }
+
+    let previous = previous?;
+    neighbors
+        .iter()
+        .copied()
+        .filter(|neighbor| *neighbor != previous)
+        .min_by_key(|neighbor| {
+            let dx = neighbor.0.abs_diff(current.0);
+            let dy = neighbor.1.abs_diff(current.1);
+            (dy, dx, *neighbor)
+        })
+        .or(Some(previous))
+}
+
+fn remove_collinear_points(points: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+
+    let mut simplified = Vec::with_capacity(points.len());
+    for index in 0..points.len() {
+        let previous = points[(index + points.len() - 1) % points.len()];
+        let current = points[index];
+        let next = points[(index + 1) % points.len()];
+
+        let delta_prev_x =
+            i64::try_from(current.0).unwrap_or(0) - i64::try_from(previous.0).unwrap_or(0);
+        let delta_prev_y =
+            i64::try_from(current.1).unwrap_or(0) - i64::try_from(previous.1).unwrap_or(0);
+        let delta_next_x =
+            i64::try_from(next.0).unwrap_or(0) - i64::try_from(current.0).unwrap_or(0);
+        let delta_next_y =
+            i64::try_from(next.1).unwrap_or(0) - i64::try_from(current.1).unwrap_or(0);
+
+        if delta_prev_x * delta_next_y != delta_prev_y * delta_next_x {
+            simplified.push(current);
+        }
+    }
+
+    simplified
+}
+
+fn resample_outline(points: &[(usize, usize)], max_points: usize) -> Vec<(usize, usize)> {
+    if points.len() <= max_points {
+        return points.to_vec();
+    }
+
+    let stride = points.len().div_ceil(max_points);
+    points.iter().step_by(stride).copied().collect()
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::similar_names
+)]
+fn normalize_outline_to_font(points: &[(usize, usize)]) -> Option<Vec<(i16, i16)>> {
+    let min_x = points.iter().map(|(x, _)| *x).min()?;
+    let max_x = points.iter().map(|(x, _)| *x).max()?;
+    let min_y = points.iter().map(|(_, y)| *y).min()?;
+    let max_y = points.iter().map(|(_, y)| *y).max()?;
     if max_x <= min_x || max_y <= min_y {
         return None;
     }
 
     let width_span = max_x - min_x + 1;
     let height_span = max_y - min_y + 1;
-    let baseline_y = max_y;
-    let sample_columns = 18_usize;
-    let glyph_bucket = (glyph_index * sample_columns) / glyph_count.max(1);
-    let phase_shift = glyph_bucket % 5;
-
-    let mut top_points = Vec::new();
-    let mut bottom_points = Vec::new();
-
-    for sample_index in 0..sample_columns {
-        let shifted_index = (sample_index + phase_shift) % sample_columns;
-        let local_x = min_x + ((shifted_index * width_span) / sample_columns).min(width_span - 1);
-        let column_range_end = (local_x + (width_span / sample_columns).max(1)).min(max_x + 1);
-
-        let mut top_hit: Option<usize> = None;
-        let mut bottom_hit: Option<usize> = None;
-
-        for x in local_x..column_range_end {
-            for y in min_y..=max_y {
-                if is_ink(*sheet.get_pixel(u32::try_from(x).ok()?, u32::try_from(y).ok()?)) {
-                    top_hit = Some(top_hit.map_or(y, |current| current.min(y)));
-                    bottom_hit = Some(bottom_hit.map_or(y, |current| current.max(y)));
-                }
-            }
-        }
-
-        let Some(top_y) = top_hit else {
-            continue;
-        };
-        let bottom_y = bottom_hit.unwrap_or(top_y);
-
-        let normalized_x = scale_to_units(local_x - min_x, width_span, 520) + 50;
-        let normalized_top = scale_y_to_units(baseline_y.saturating_sub(top_y), height_span);
-        let normalized_bottom = scale_y_to_units(baseline_y.saturating_sub(bottom_y), height_span);
-
-        top_points.push((normalized_x, normalized_top));
-        bottom_points.push((normalized_x, normalized_bottom.max(0)));
-    }
-
-    if top_points.len() < 4 {
+    let target_width = 520_i32;
+    let target_height = 700_i32;
+    let width_i32 = i32::try_from(width_span).ok()?;
+    let height_i32 = i32::try_from(height_span).ok()?;
+    if width_i32 <= 0 || height_i32 <= 0 {
         return None;
     }
 
-    bottom_points.reverse();
-    top_points.extend(bottom_points);
-    Some(top_points)
-}
+    let scale_x = (target_width as f32) / (width_i32 as f32);
+    let scale_y = (target_height as f32) / (height_i32 as f32);
+    let scale = scale_x.min(scale_y);
+    let resized_width = ((width_i32 as f32) * scale).round() as i32;
+    let resized_height = ((height_i32 as f32) * scale).round() as i32;
+    let horizontal_padding = ((target_width - resized_width) / 2).max(0);
+    let baseline = resized_height.max(1);
 
-const fn is_ink(pixel: Luma<u8>) -> bool {
-    pixel.0[0] < 210
+    let normalized = points
+        .iter()
+        .map(|(x, y)| {
+            let local_x = i32::try_from(x.saturating_sub(min_x)).unwrap_or(0);
+            let local_y = i32::try_from(y.saturating_sub(min_y)).unwrap_or(0);
+            let mapped_x = ((local_x as f32) * scale).round() as i32;
+            let mapped_y = ((local_y as f32) * scale).round() as i32;
+            (
+                clamp_i32_to_i16(horizontal_padding + mapped_x + 50),
+                clamp_i32_to_i16((baseline - mapped_y).max(0)),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    Some(normalized)
 }
 
 fn scale_to_units(value: usize, full_span: usize, target_span: i16) -> i16 {
@@ -880,12 +1696,6 @@ fn mix_seed(base_seed: u64, character: char) -> u64 {
     base_seed
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
         .wrapping_add(u64::from(u32::from(character)))
-}
-
-const fn seeded_range(seed: u64, lane: u32, modulo: i16) -> i16 {
-    let shift = lane % 8 * 8;
-    let narrowed = ((seed >> shift) & 0xFF) as i16;
-    if modulo == 0 { 0 } else { narrowed % modulo }
 }
 
 const fn align_to(value: usize, alignment: usize) -> usize {

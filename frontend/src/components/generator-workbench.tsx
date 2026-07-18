@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { generateInkformResult, type EngineMode } from "../lib/inkform-engine";
 import type { GenerationResult } from "../lib/engine-types";
 
-const starterText = "Grüße aus Inkform";
+const starterText = "The quick brown fox jumps over the lazy dog.";
 
 export function GeneratorWorkbench() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);

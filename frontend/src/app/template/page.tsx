@@ -25,14 +25,15 @@ export default function TemplatePage() {
             fontSize: "0.78rem"
           }}
         >
-          Handwriting sheet
+          Optional helper
         </p>
         <h1 style={{ margin: "0.75rem 0 1rem", fontSize: "clamp(2rem, 5vw, 3.5rem)" }}>
-          Use the Inkform template for cleaner extraction.
+          Use the Inkform template only if you want a more controlled sample.
         </h1>
         <p style={{ marginTop: 0, color: "var(--muted)", lineHeight: 1.7, maxWidth: "52rem" }}>
-          This page makes the current glyph-to-cell mapping explicit. Print the sheet, write one
-          character per box, and upload a flat, evenly lit photo or scan for the strongest results.
+          The main product flow accepts any clear handwriting photo. This template remains
+          available as an advanced option when you want a more structured sample for testing or
+          comparison.
         </p>
         <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", marginBottom: "1.5rem" }}>
           <TemplateDownload />

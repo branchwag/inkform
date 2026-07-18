@@ -1,8 +1,8 @@
 const checklist = [
   "Use an evenly lit photo or a flatbed scan.",
-  "Keep every glyph inside its guide box.",
+  "Keep the handwriting large enough to read clearly.",
   "Avoid shadows, blur, and folded paper.",
-  "Fill the full Latin-extended sheet for the current v1 flow."
+  "Include a few words or lines so Inkform has more stroke detail to study."
 ];
 
 export default function GeneratePage() {
@@ -26,15 +26,15 @@ export default function GeneratePage() {
             fontSize: "0.78rem"
           }}
         >
-          Guided input
+          Upload tips
         </p>
         <h1 style={{ margin: "0.75rem 0 1rem", fontSize: "clamp(2rem, 5vw, 3.5rem)" }}>
-          Prepare a handwriting sheet for generation.
+          Get a stronger result from a freeform handwriting photo.
         </h1>
         <p style={{ lineHeight: 1.7, color: "var(--muted)", marginTop: 0 }}>
-          This page is the product scaffold for the upload flow. The Rust engine already exposes
-          validation, generation, and preview primitives; the next implementation step is wiring
-          the compiled WASM package into this guided form.
+          Inkform works from ordinary handwriting samples, not a required template. These tips are
+          here to help users capture cleaner input while the Rust engine keeps improving its
+          freeform extraction and font assembly.
         </p>
 
         <div
@@ -71,9 +71,9 @@ export default function GeneratePage() {
           >
             <h2 style={{ marginTop: 0 }}>Pipeline status</h2>
             <p style={{ color: "var(--muted)", lineHeight: 1.7 }}>
-              The current scaffold validates sample dimensions, tracks script-pack targets, builds
-              a placeholder artifact, and produces preview plans. Real raster segmentation and font
-              assembly are the next milestones.
+              The current build validates uploads, studies handwriting structure, generates a TTF
+              artifact, and previews typed text in the browser. The main remaining gap is making
+              the generated letterforms look more like the uploaded hand.
             </p>
           </div>
         </div>

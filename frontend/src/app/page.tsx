@@ -63,33 +63,10 @@ export default function HomePage() {
               margin: 0
             }}
           >
-            Upload a handwriting sheet, preview your words, and save the result in one simple flow.
-            Inkform is built to make personal handwriting feel ready for digital use from any clear photo you already have.
+            Upload any clear photo or scan of your handwriting, preview your words, and save the
+            result in one simple flow. Inkform is built to turn personal handwriting into
+            something you can actually use digitally.
           </p>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem", marginTop: "1.5rem" }}>
-            <a
-              href="#workflow"
-              style={{
-                padding: "0.9rem 1.2rem",
-                borderRadius: "999px",
-                background: "var(--accent)",
-                color: "#fff8f2"
-              }}
-            >
-              See how it works
-            </a>
-            <a
-              href="https://openai.devpost.com/rules"
-              style={{
-                padding: "0.9rem 1.2rem",
-                borderRadius: "999px",
-                border: "1px solid var(--border)",
-                background: "var(--surface-strong)"
-              }}
-            >
-              Build Week rules
-            </a>
-          </div>
         </div>
 
         <section

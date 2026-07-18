@@ -2,7 +2,7 @@ import { generateDemoResult } from "./demo-engine";
 import type { GenerationResult } from "./engine-types";
 
 type WasmModule = {
-  default: (moduleOrPath?: string | URL) => Promise<unknown>;
+  default: (options?: { module_or_path?: string | URL }) => Promise<unknown>;
   generate_font_json: (
     bytes: Uint8Array,
     width: number,
@@ -59,7 +59,7 @@ async function loadWasmModule(): Promise<WasmModule | null> {
   try {
     const dynamicImport = (specifier: string) => import(/* webpackIgnore: true */ specifier);
     const wasmExports = (await dynamicImport("/wasm/inkform_wasm.js")) as unknown as WasmModule;
-    await wasmExports.default("/wasm/inkform_wasm_bg.wasm");
+    await wasmExports.default({ module_or_path: "/wasm/inkform_wasm_bg.wasm" });
     return wasmExports;
   } catch {
     return null;
