@@ -1267,34 +1267,29 @@ const fn recipes_for_character(character: char) -> Option<&'static [StrokeRecipe
 #[allow(clippy::too_many_lines)]
 const fn looped_recipes_for_character(character: char) -> Option<&'static [StrokeRecipe]> {
     match character {
-        'f' => Some(&[
-            StrokeRecipe {
-                points: &[
-                    (265.0, 410.0),
-                    (150.0, 585.0),
-                    (220.0, 760.0),
-                    (350.0, 680.0),
-                    (335.0, 525.0),
-                    (255.0, 395.0),
-                    (235.0, 40.0),
-                    (185.0, -185.0),
-                    (100.0, -250.0),
-                    (65.0, -155.0),
-                    (145.0, -65.0),
-                    (235.0, -105.0),
-                ],
-                closed: false,
-                thickness_scale: 0.8,
-            },
-            StrokeRecipe {
-                points: &[(105.0, 405.0), (350.0, 405.0)],
-                closed: false,
-                thickness_scale: 0.56,
-            },
-        ]),
+        'f' => Some(&[StrokeRecipe {
+            points: &[
+                (75.0, 35.0),
+                (185.0, 45.0),
+                (245.0, 250.0),
+                (255.0, 630.0),
+                (320.0, 760.0),
+                (405.0, 670.0),
+                (390.0, 470.0),
+                (290.0, 310.0),
+                (235.0, 40.0),
+                (180.0, -210.0),
+                (80.0, -320.0),
+                (20.0, -190.0),
+                (105.0, -40.0),
+                (220.0, -110.0),
+            ],
+            closed: false,
+            thickness_scale: 0.8,
+        }]),
         'k' => Some(&[
             StrokeRecipe {
-                points: &[(135.0, 15.0), (140.0, 760.0)],
+                points: &[(130.0, 15.0), (165.0, 760.0)],
                 closed: false,
                 thickness_scale: 0.88,
             },
@@ -1302,10 +1297,10 @@ const fn looped_recipes_for_character(character: char) -> Option<&'static [Strok
             // but avoiding a retraced stem prevents a pinched, distorted bowl.
             StrokeRecipe {
                 points: &[
-                    (140.0, 395.0),
-                    (320.0, 555.0),
-                    (230.0, 350.0),
-                    (390.0, 20.0),
+                    (150.0, 350.0),
+                    (300.0, 500.0),
+                    (225.0, 315.0),
+                    (400.0, 20.0),
                 ],
                 closed: false,
                 thickness_scale: 0.76,
@@ -1326,10 +1321,11 @@ const fn looped_recipes_for_character(character: char) -> Option<&'static [Strok
         'n' => Some(&[StrokeRecipe {
             points: &[
                 (135.0, 20.0),
-                (145.0, 420.0),
-                (225.0, 320.0),
-                (305.0, 390.0),
-                (375.0, 20.0),
+                (145.0, 430.0),
+                (195.0, 445.0),
+                (265.0, 360.0),
+                (310.0, 205.0),
+                (320.0, 20.0),
             ],
             closed: false,
             thickness_scale: 0.78,
@@ -1795,12 +1791,12 @@ mod tests {
     }
 
     #[test]
-    fn cursive_f_keeps_its_crossbar_and_looped_descender() {
+    fn cursive_f_uses_one_continuous_two_loop_trajectory() {
         let Some(contours) = build_glyph_from_grammar('f', CURSIVE_STYLE, 7) else {
             panic!("missing grammar for f");
         };
 
-        assert_eq!(contours.len(), 2);
+        assert_eq!(contours.len(), 1);
         assert!(contours[0].iter().any(|(_, y)| *y < -100));
     }
 }

@@ -68,6 +68,7 @@
 - Prefer explicit error handling with typed error enums
 - Run clippy before every commit
 - Maintain a real test suite, not just smoke tests
+- Do not push commits unless the user explicitly requests a push
 
 ## Deployment Constraints
 
