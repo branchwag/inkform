@@ -37,12 +37,12 @@ jobs:
       - name: Lint frontend
         working-directory: frontend
         run: npm run lint
-      - name: Type-check frontend
-        working-directory: frontend
-        run: npm run typecheck
       - name: Build WASM package
         working-directory: frontend
         run: npm run wasm:build
+      - name: Type-check frontend
+        working-directory: frontend
+        run: npm run typecheck
       - name: Build frontend
         working-directory: frontend
         run: npm run build
