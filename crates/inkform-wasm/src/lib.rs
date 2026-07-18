@@ -200,7 +200,7 @@ fn build_generation_payload(
         font_artifact.anchor_count,
         escape_json("inkform-wasm-artifact"),
         escape_json(&binary_hash),
-        escape_json("inkform-preview.ttf"),
+        escape_json("inkform.ttf"),
         escape_json("font/ttf"),
         binary_bytes,
         escape_json(&preview_response.render_plan),

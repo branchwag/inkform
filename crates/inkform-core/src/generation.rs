@@ -54,17 +54,25 @@ pub fn generate_font_with_transcript(
                 .filter(|glyph| glyph.character.is_some())
                 .count()
         });
-    let family_name = format!("Inkform-{:08X}", sample_identity(sample_image));
+    let family_name = String::from("Inkform");
+    let font_identifier = format!("Inkform-{:08X}", sample_identity(sample_image));
 
     let binary = match transcript {
         Some(transcript) if !transcript.trim().is_empty() => build_ttf_with_transcript(
             &family_name,
+            &font_identifier,
             sample_image,
             script_pack,
             &glyphs,
             Some(transcript),
         ),
-        _ => build_ttf(&family_name, sample_image, script_pack, &glyphs),
+        _ => build_ttf(
+            &family_name,
+            &font_identifier,
+            sample_image,
+            script_pack,
+            &glyphs,
+        ),
     };
 
     Ok(FontArtifact {

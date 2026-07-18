@@ -70,15 +70,24 @@ struct StyleEmbedding {
 
 pub fn build_ttf(
     family_name: &str,
+    font_identifier: &str,
     sample_image: &SampleImage,
     script_pack: &ScriptPack,
     glyphs: &[GlyphCandidate],
 ) -> Vec<u8> {
-    build_ttf_with_transcript(family_name, sample_image, script_pack, glyphs, None)
+    build_ttf_with_transcript(
+        family_name,
+        font_identifier,
+        sample_image,
+        script_pack,
+        glyphs,
+        None,
+    )
 }
 
 pub fn build_ttf_with_transcript(
     family_name: &str,
+    font_identifier: &str,
     sample_image: &SampleImage,
     script_pack: &ScriptPack,
     glyphs: &[GlyphCandidate],
@@ -86,7 +95,12 @@ pub fn build_ttf_with_transcript(
 ) -> Vec<u8> {
     let generated_glyphs = build_generated_glyphs(sample_image, script_pack, glyphs, transcript);
     let glyph_definitions = build_glyph_definitions_from_generated(&generated_glyphs);
-    build_ttf_from_definitions(family_name, script_pack, &glyph_definitions)
+    build_ttf_from_definitions(
+        family_name,
+        font_identifier,
+        script_pack,
+        &glyph_definitions,
+    )
 }
 
 #[must_use]
@@ -113,6 +127,7 @@ pub fn build_preview_svg_with_transcript(
 
 fn build_ttf_from_definitions(
     family_name: &str,
+    font_identifier: &str,
     script_pack: &ScriptPack,
     glyph_definitions: &[GlyphDefinition],
 ) -> Vec<u8> {
@@ -123,7 +138,7 @@ fn build_ttf_from_definitions(
     let (glyf, loca, loca_format) = build_glyf_and_loca_tables(glyph_definitions);
     let head = build_head_table(metrics, loca_format);
     let cmap = build_cmap_table(script_pack);
-    let name = build_name_table(family_name);
+    let name = build_name_table(family_name, font_identifier);
     let post = build_post_table();
     let os2 = build_os2_table(metrics, script_pack);
 
@@ -2126,10 +2141,10 @@ fn build_cmap_table(script_pack: &ScriptPack) -> Vec<u8> {
     table
 }
 
-fn build_name_table(family_name: &str) -> Vec<u8> {
-    let unique_identifier = format!("Inkform:{family_name}:Regular:1.0");
+fn build_name_table(family_name: &str, font_identifier: &str) -> Vec<u8> {
+    let unique_identifier = format!("Inkform:{font_identifier}:Regular:1.0");
     let full_name = format!("{family_name} Regular");
-    let postscript_name = format!("{family_name}-Regular");
+    let postscript_name = format!("{font_identifier}-Regular");
     let records = [
         (1_u16, family_name),
         (2_u16, "Regular"),
@@ -2576,7 +2591,12 @@ mod tests {
             glyphs: vec!['A'],
         };
         let definitions = vec![notdef_glyph(), notdef_glyph()];
-        let font = build_ttf_from_definitions("Inkform Checksum", &script_pack, &definitions);
+        let font = build_ttf_from_definitions(
+            "Inkform Checksum",
+            "Inkform-Checksum",
+            &script_pack,
+            &definitions,
+        );
 
         assert_eq!(table_checksum(&font), 0xB1B0_AFBA);
     }

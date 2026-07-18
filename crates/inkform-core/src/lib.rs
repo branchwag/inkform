@@ -87,12 +87,12 @@ mod tests {
 
         assert_eq!(artifact.script_pack_id, "latin-extended");
         assert!(artifact.glyphs.len() >= 32);
-        assert!(artifact.family_name.starts_with("Inkform-"));
+        assert_eq!(artifact.family_name, "Inkform");
         assert_eq!(&artifact.binary[0..4], &[0x00, 0x01, 0x00, 0x00]);
     }
 
     #[test]
-    fn gives_distinct_samples_distinct_font_families() {
+    fn gives_distinct_samples_distinct_font_identifiers() {
         let first_sample = SampleImage {
             width: 1600,
             height: 2200,
@@ -118,7 +118,29 @@ mod tests {
             Err(error) => panic!("second font generation failed: {error}"),
         };
 
-        assert_ne!(first_artifact.family_name, second_artifact.family_name);
+        assert_eq!(first_artifact.family_name, "Inkform");
+        assert_eq!(second_artifact.family_name, "Inkform");
+
+        let first_face = match Face::parse(&first_artifact.binary, 0) {
+            Ok(face) => face,
+            Err(error) => panic!("first font could not be parsed: {error:?}"),
+        };
+        let second_face = match Face::parse(&second_artifact.binary, 0) {
+            Ok(face) => face,
+            Err(error) => panic!("second font could not be parsed: {error:?}"),
+        };
+        let first_identifier = first_face
+            .names()
+            .into_iter()
+            .find(|name| name.name_id == 3)
+            .and_then(|name| name.to_string());
+        let second_identifier = second_face
+            .names()
+            .into_iter()
+            .find(|name| name.name_id == 3)
+            .and_then(|name| name.to_string());
+
+        assert_ne!(first_identifier, second_identifier);
     }
 
     #[test]
