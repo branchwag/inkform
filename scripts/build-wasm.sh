@@ -13,6 +13,9 @@ wasm-pack build crates/inkform-wasm \
   --out-dir ../../frontend/public/wasm \
   --out-name inkform_wasm
 
+# Keep the deployable binary tracked while wasm-pack's support files stay generated.
+printf '%s\n' '*' '!.gitignore' '!inkform_wasm_bg.wasm' > frontend/public/wasm/.gitignore
+
 # Let Next bundle the JS wrapper instead of asking the browser to import a raw
 # public asset. The WebAssembly binary remains in public/wasm for streaming.
 cp frontend/public/wasm/inkform_wasm.js frontend/src/lib/generated/inkform_wasm.js

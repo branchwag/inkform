@@ -125,7 +125,7 @@ fn build_ttf_from_definitions(
     let cmap = build_cmap_table(script_pack);
     let name = build_name_table(family_name);
     let post = build_post_table();
-    let os2 = build_os2_table(metrics);
+    let os2 = build_os2_table(metrics, script_pack);
 
     let tables = vec![
         TableRecord {
@@ -2127,10 +2127,14 @@ fn build_cmap_table(script_pack: &ScriptPack) -> Vec<u8> {
 }
 
 fn build_name_table(family_name: &str) -> Vec<u8> {
+    let unique_identifier = format!("Inkform:{family_name}:Regular:1.0");
+    let full_name = format!("{family_name} Regular");
     let records = [
         (1_u16, family_name),
         (2_u16, "Regular"),
-        (4_u16, family_name),
+        (3_u16, unique_identifier.as_str()),
+        (4_u16, full_name.as_str()),
+        (5_u16, "Version 1.0"),
         (6_u16, "InkformPreview-Regular"),
     ];
 
@@ -2178,7 +2182,7 @@ fn build_post_table() -> Vec<u8> {
     table
 }
 
-fn build_os2_table(metrics: FontMetrics) -> Vec<u8> {
+fn build_os2_table(metrics: FontMetrics, script_pack: &ScriptPack) -> Vec<u8> {
     let mut table = Vec::new();
     push_u16(&mut table, 0);
     push_i16(&mut table, metrics.x_avg_char_width);
@@ -2203,14 +2207,36 @@ fn build_os2_table(metrics: FontMetrics) -> Vec<u8> {
     push_u32(&mut table, 0);
     table.extend_from_slice(b"INKF");
     push_u16(&mut table, 0x0040);
-    push_u16(&mut table, 32);
-    push_u16(&mut table, 255);
+    let (first_character, last_character) = windows_character_range(script_pack);
+    push_u16(&mut table, first_character);
+    push_u16(&mut table, last_character);
     push_i16(&mut table, ASCENDER);
     push_i16(&mut table, DESCENDER);
     push_i16(&mut table, LINE_GAP);
     push_u16(&mut table, u16::try_from(ASCENDER).unwrap_or(0));
     push_u16(&mut table, u16::try_from(-DESCENDER).unwrap_or(0));
     table
+}
+
+fn windows_character_range(script_pack: &ScriptPack) -> (u16, u16) {
+    let mut first_character = u16::MAX;
+    let mut last_character = 0_u16;
+
+    for character in &script_pack.glyphs {
+        let codepoint = u32::from(*character);
+        let Ok(codepoint) = u16::try_from(codepoint) else {
+            continue;
+        };
+
+        first_character = first_character.min(codepoint);
+        last_character = last_character.max(codepoint);
+    }
+
+    if first_character == u16::MAX {
+        (0, 0)
+    } else {
+        (first_character, last_character)
+    }
 }
 
 fn build_font_file(mut tables: Vec<TableRecord>) -> Vec<u8> {
@@ -2480,19 +2506,37 @@ mod tests {
 
     #[test]
     fn writes_a_version_zero_os2_table_with_the_required_length() {
-        let table = super::build_os2_table(super::FontMetrics {
-            advance_width_max: 600,
-            min_left_side_bearing: 0,
-            min_right_side_bearing: 0,
-            x_max_extent: 600,
-            x_min: 0,
-            y_min: 0,
-            x_max: 600,
-            y_max: 700,
-            x_avg_char_width: 600,
-        });
+        let script_pack = ScriptPack::latin_extended();
+        let table = super::build_os2_table(
+            super::FontMetrics {
+                advance_width_max: 600,
+                min_left_side_bearing: 0,
+                min_right_side_bearing: 0,
+                x_max_extent: 600,
+                x_min: 0,
+                y_min: 0,
+                x_max: 600,
+                y_max: 700,
+                x_avg_char_width: 600,
+            },
+            &script_pack,
+        );
 
         assert_eq!(table.len(), 78);
+    }
+
+    #[test]
+    fn windows_character_range_matches_the_cmap_repertoire() {
+        let script_pack = ScriptPack {
+            id: String::from("test"),
+            display_name: String::from("Test"),
+            glyphs: vec!['A', '\u{00DF}', '\u{20AC}'],
+        };
+
+        assert_eq!(
+            super::windows_character_range(&script_pack),
+            (0x0041, 0x20AC)
+        );
     }
 
     #[test]

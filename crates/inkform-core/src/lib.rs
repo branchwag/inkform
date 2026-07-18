@@ -24,7 +24,7 @@ mod tests {
         PreviewRequest, SampleImage, SampleQuality, ScriptPack, generate_font, preview_text,
         validate_sample,
     };
-    use ttf_parser::{Face, OutlineBuilder};
+    use ttf_parser::{Face, GlyphId, OutlineBuilder};
 
     #[derive(Default)]
     struct CountingOutlineBuilder {
@@ -112,6 +112,14 @@ mod tests {
             Err(error) => panic!("unexpected parser error: {error:?}"),
         };
 
+        let name_ids = face
+            .names()
+            .into_iter()
+            .map(|name| name.name_id)
+            .collect::<Vec<_>>();
+        assert!(name_ids.contains(&3), "expected a unique font identifier");
+        assert!(name_ids.contains(&5), "expected a version name record");
+
         let expected_glyph_count = u16::try_from(artifact.glyphs.len())
             .unwrap_or(u16::MAX)
             .saturating_add(1);
@@ -132,6 +140,20 @@ mod tests {
             builder.move_events > 0,
             "expected drawable contours for 'A'"
         );
+
+        for glyph_index in 0..face.number_of_glyphs() {
+            let glyph_id = GlyphId(glyph_index);
+            if face.glyph_bounding_box(glyph_id).is_none() {
+                continue;
+            }
+
+            let mut glyph_builder = CountingOutlineBuilder::default();
+            let outline = face.outline_glyph(glyph_id, &mut glyph_builder);
+            assert!(
+                outline.is_some(),
+                "expected glyph {glyph_index} to have a readable outline"
+            );
+        }
     }
 
     #[test]
