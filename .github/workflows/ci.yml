@@ -169,7 +169,7 @@ jobs:
               foreach ($character in @([uint32][char]'A', [uint32][char]'e')) {
                   $metrics = New-Object InkformFontValidator+GlyphMetrics
                   $result = [InkformFontValidator]::GetGlyphOutlineW($deviceContext, $character, 0, [ref]$metrics, 0, [IntPtr]::Zero, [IntPtr]::Zero)
-                  if ($result -eq [uint32]0xFFFFFFFF -or $metrics.BlackBoxX -eq 0 -or $metrics.BlackBoxY -eq 0) {
+                  if ($result -eq [uint32]::MaxValue -or $metrics.BlackBoxX -eq 0 -or $metrics.BlackBoxY -eq 0) {
                       throw "GDI could not outline character $([char]$character) from the generated font."
                   }
               }
