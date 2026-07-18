@@ -315,11 +315,21 @@ fn build_glyph_shapes(
             .get(glyph_index)
             .map_or(*character, |glyph| glyph.character);
         let seed = mix_seed(base_seed, *character);
-        let hinted_shape = select_shape_for_glyph(&extracted_shapes, candidate, glyph_index, seed);
+        let transcript_hint =
+            extraction_result.and_then(|result| style_hint_for_character(result, candidate));
+        let hinted_shape = transcript_hint
+            .as_ref()
+            .or_else(|| select_shape_for_glyph(&extracted_shapes, candidate, glyph_index, seed));
         // The sample defines style. The grammar supplies legible topology for
         // glyphs that cannot appear in an arbitrary freeform upload.
         let style = glyph_style(style_profile, hinted_shape);
-        let advance_width = glyph_advance_width(candidate, style);
+        let advance_width = glyph_advance_width(
+            candidate,
+            style,
+            transcript_hint
+                .as_ref()
+                .map(|shape| shape.measures.width_ratio),
+        );
         let literal_contours = extraction_result.and_then(|result| {
             literal_contours_for_character(result, candidate, style_profile, seed)
         });
@@ -348,6 +358,28 @@ fn build_glyph_shapes(
     }
 
     generated
+}
+
+fn style_hint_for_character(
+    extraction: &ExtractionResult,
+    character: char,
+) -> Option<ExtractedShape> {
+    extraction
+        .glyphs
+        .iter()
+        .filter(|glyph| glyph.character == Some(character))
+        .min_by_key(|glyph| centerline_complexity(glyph))
+        .map(|glyph| ExtractedShape {
+            measures: ComponentMeasures {
+                width_ratio: glyph.width_ratio,
+                height_ratio: glyph.height_ratio,
+                slant: glyph.slant,
+                density: glyph.density,
+                baseline_offset: glyph.baseline_offset,
+                ink_area: glyph.ink_area,
+            },
+            outline: Vec::new(),
+        })
 }
 
 fn literal_contours_for_character(
@@ -447,7 +479,7 @@ const fn supports_cursive_join(character: char) -> bool {
     // similar letters read as a different character.
     matches!(
         character,
-        'c' | 'e' | 'h' | 'i' | 'l' | 'm' | 's' | 't' | 'u' | 'v' | 'w' | 'x' | 'z'
+        'c' | 'e' | 'h' | 'i' | 'l' | 's' | 't' | 'u' | 'v' | 'w' | 'x' | 'z'
     )
 }
 
@@ -1220,7 +1252,11 @@ fn algorithmic_contours(
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn glyph_advance_width(character: char, style: GlyphStyle) -> u16 {
+fn glyph_advance_width(
+    character: char,
+    style: GlyphStyle,
+    transcript_width_ratio: Option<f32>,
+) -> u16 {
     let base_width = base_glyph_advance_width(character);
     if character == ' ' {
         return 310;
@@ -1228,7 +1264,20 @@ fn glyph_advance_width(character: char, style: GlyphStyle) -> u16 {
 
     let cursive_compaction = style.cursive_score.mul_add(-0.24, 0.92);
     let styled_width = f32::from(base_width) * style.width_scale * cursive_compaction;
-    styled_width.round().clamp(280.0, 860.0) as u16
+    let sample_width = transcript_width_ratio.map(|width_ratio| {
+        // Preserve the observed character width and its surrounding breathing
+        // room. This is more faithful than a fixed Latin advance for a word
+        // whose letters are tightly joined or deliberately spread apart.
+        let stroke_allowance = style.stroke_width.mul_add(1.5, 80.0);
+        (style.body_height * width_ratio)
+            .mul_add(1.25, stroke_allowance)
+            .clamp(280.0, 860.0)
+    });
+    let advance_width = sample_width.map_or(styled_width, |sample_width| {
+        styled_width.mul_add(0.35, sample_width * 0.65)
+    });
+
+    advance_width.round().clamp(280.0, 860.0) as u16
 }
 
 const fn base_glyph_advance_width(character: char) -> u16 {
@@ -2288,11 +2337,12 @@ mod tests {
     use super::{
         ComponentMeasures, ExtractedShape, build_glyph_shapes, build_maxp_table,
         build_ttf_from_definitions, derive_style_profile, format4_search_params,
-        is_safe_literal_anchor, mix_seed, notdef_glyph, remix_shape_outline, supports_cursive_join,
-        table_checksum,
+        glyph_advance_width, is_safe_literal_anchor, mix_seed, notdef_glyph, remix_shape_outline,
+        supports_cursive_join, table_checksum,
     };
     use crate::domain::{GlyphCandidate, ScriptPack};
     use crate::extraction::{ExtractedGlyph, ExtractionResult};
+    use crate::glyph_grammar::GlyphStyle;
 
     #[test]
     fn transcript_anchor_restrokes_safe_centerlines() {
@@ -2516,6 +2566,27 @@ mod tests {
         assert!(!supports_cursive_join('q'));
         assert!(!supports_cursive_join('n'));
         assert!(!supports_cursive_join('r'));
-        assert!(supports_cursive_join('m'));
+        assert!(!supports_cursive_join('m'));
+    }
+
+    #[test]
+    fn transcript_widths_control_generated_advances() {
+        let style = GlyphStyle {
+            slant: 40.0,
+            width_scale: 1.0,
+            stroke_width: 40.0,
+            waviness: 12.0,
+            baseline_lift: 0.0,
+            body_height: 360.0,
+            ascender_height: 700.0,
+            descender_depth: 180.0,
+            cursive_score: 0.8,
+        };
+        let no_transcript = glyph_advance_width('n', style, None);
+        let narrow_transcript = glyph_advance_width('n', style, Some(0.35));
+        let wide_transcript = glyph_advance_width('m', style, Some(1.05));
+
+        assert!(narrow_transcript < no_transcript);
+        assert!(wide_transcript > narrow_transcript);
     }
 }
