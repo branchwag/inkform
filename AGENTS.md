@@ -33,6 +33,8 @@
 - Do not use an embedded reference font in generation
 - Use the uploaded handwriting image to derive style signals; use the in-project glyph grammar to
   synthesize complete, legible character topology for freeform samples
+- Cursive samples additionally drive grammar centerline rounding and open-stroke terminal taper;
+  do not add disconnected pseudo-ligature strokes without contextual shaping support
 
 ## Rust Coding Constraints
 

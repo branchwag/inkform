@@ -46,6 +46,7 @@ struct StyleProfile {
     stroke_width: f32,
     waviness: f32,
     baseline_lift: f32,
+    cursive_score: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -269,10 +270,10 @@ fn build_glyph_shapes(
             .map_or(*character, |glyph| glyph.character);
         let seed = mix_seed(base_seed, *character);
         let hinted_shape = select_shape_for_glyph(&extracted_shapes, candidate, glyph_index, seed);
-        let advance_width = glyph_advance_width(candidate);
         // The sample defines style. The grammar supplies legible topology for
         // glyphs that cannot appear in an arbitrary freeform upload.
         let style = glyph_style(style_profile, hinted_shape);
+        let advance_width = glyph_advance_width(candidate, style);
         let contours = build_glyph_from_grammar(candidate, style, seed)
             .filter(|contours| !contours.is_empty())
             .unwrap_or_else(|| algorithmic_contours(candidate, advance_width, seed, style_profile));
@@ -335,6 +336,7 @@ fn derive_style_profile(
         stroke_width: 54.0,
         waviness: 28.0,
         baseline_lift: 18.0,
+        cursive_score: 0.25,
     };
 
     if !extracted_shapes.is_empty() {
@@ -382,6 +384,7 @@ fn derive_style_profile(
     let average_slant = average(&slants);
     let average_density = average(&densities);
     let average_baseline_offset = average(&baseline_offsets);
+    let cursive_score = cursive_score(average_slant, average_density, average_width_ratio);
 
     StyleProfile {
         slant: clamp_f32(average_slant * 220.0, -110.0, 140.0),
@@ -392,6 +395,7 @@ fn derive_style_profile(
         stroke_width: clamp_f32(average_density.mul_add(88.0, 34.0), 28.0, 110.0),
         waviness: clamp_f32((1.0 - average_density).mul_add(54.0, 14.0), 12.0, 64.0),
         baseline_lift: clamp_f32(average_baseline_offset * 64.0, -18.0, 72.0),
+        cursive_score,
     }
 }
 
@@ -416,6 +420,7 @@ fn derive_style_profile_from_shapes(extracted_shapes: &[ExtractedShape]) -> Opti
     let average_slant = average(&slants);
     let average_density = average(&densities);
     let average_baseline_offset = average(&baseline_offsets);
+    let cursive_score = cursive_score(average_slant, average_density, average_width_ratio);
 
     Some(StyleProfile {
         slant: clamp_f32(average_slant * 220.0, -110.0, 140.0),
@@ -426,6 +431,7 @@ fn derive_style_profile_from_shapes(extracted_shapes: &[ExtractedShape]) -> Opti
         stroke_width: clamp_f32(average_density.mul_add(88.0, 34.0), 28.0, 110.0),
         waviness: clamp_f32((1.0 - average_density).mul_add(54.0, 14.0), 12.0, 64.0),
         baseline_lift: clamp_f32(average_baseline_offset * 64.0, -18.0, 72.0),
+        cursive_score,
     })
 }
 
@@ -449,7 +455,19 @@ fn glyph_style(style_profile: StyleProfile, hinted_shape: Option<&ExtractedShape
         body_height: style_profile.body_height,
         ascender_height: style_profile.ascender_height,
         descender_depth: style_profile.descender_depth,
+        cursive_score: style_profile.cursive_score,
     }
+}
+
+fn cursive_score(slant: f32, density: f32, width_ratio: f32) -> f32 {
+    let slant_signal = slant.abs().mul_add(2.6, 0.0).min(0.55);
+    let thin_stroke_signal = (0.42 - density).max(0.0).mul_add(1.25, 0.0).min(0.35);
+    let narrow_signal = (1.0 - width_ratio).max(0.0).mul_add(0.18, 0.0).min(0.1);
+    clamp_f32(
+        0.32 + slant_signal + thin_stroke_signal + narrow_signal,
+        0.12,
+        0.92,
+    )
 }
 
 fn extract_shape_library(sheet: &GrayImage) -> Vec<ExtractedShape> {
@@ -625,7 +643,7 @@ fn remix_shape_outline(
     seed: u64,
 ) -> Option<Vec<(i16, i16)>> {
     let glyph_kind = classify_glyph(character);
-    let target_width = f32::from(glyph_advance_width(character)) - 110.0;
+    let target_width = f32::from(base_glyph_advance_width(character)) - 110.0;
     let width_scale = match glyph_kind {
         GlyphKind::Uppercase => 1.08,
         GlyphKind::Lowercase => 0.94,
@@ -926,7 +944,19 @@ fn algorithmic_contours(
     )]
 }
 
-const fn glyph_advance_width(character: char) -> u16 {
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn glyph_advance_width(character: char, style: GlyphStyle) -> u16 {
+    let base_width = base_glyph_advance_width(character);
+    if character == ' ' {
+        return 310;
+    }
+
+    let cursive_compaction = style.cursive_score.mul_add(-0.16, 0.96);
+    let styled_width = f32::from(base_width) * style.width_scale * cursive_compaction;
+    styled_width.round().clamp(280.0, 860.0) as u16
+}
+
+const fn base_glyph_advance_width(character: char) -> u16 {
     match character {
         'A'..='Z' => 720,
         'a'..='z' | 'Ä' | 'Ö' | 'Ü' | 'ä' | 'ö' | 'ü' | 'ß' => 620,

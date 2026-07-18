@@ -8,6 +8,7 @@ pub struct GlyphStyle {
     pub body_height: f32,
     pub ascender_height: f32,
     pub descender_depth: f32,
+    pub cursive_score: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1287,20 +1288,68 @@ fn render_recipe(
                 style.baseline_lift
             };
             let shifted_x = *x + offset_x;
+            let cursive_slant = style.cursive_score * 72.0;
             let scaled_x = (shifted_x - 280.0).mul_add(
                 style.width_scale,
-                style.slant.mul_add(shifted_y / 700.0, 280.0),
+                (style.slant + cursive_slant).mul_add(shifted_y / 700.0, 280.0),
             ) + jitter_x;
             let scaled_y = shifted_y + height_shift + jitter_y;
             (scaled_x, scaled_y)
         })
         .collect::<Vec<_>>();
 
+    let smoothed_points = round_stroke_points(&styled_points, recipe.closed, style.cursive_score);
     if recipe.closed {
-        return render_closed_stroke(&styled_points, thickness);
+        return render_closed_stroke(&smoothed_points, thickness);
     }
 
-    render_open_stroke(&styled_points, thickness)
+    render_open_stroke(&smoothed_points, thickness, style.cursive_score)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn round_stroke_points(points: &[(f32, f32)], closed: bool, cursive_score: f32) -> Vec<(f32, f32)> {
+    let passes = if cursive_score >= 0.72 {
+        2
+    } else {
+        usize::from(cursive_score >= 0.32)
+    };
+    let mut rounded = points.to_vec();
+
+    for _ in 0..passes {
+        if rounded.len() < 2 {
+            break;
+        }
+
+        let mut next = Vec::with_capacity(rounded.len().saturating_mul(2));
+        if !closed && let Some(first) = rounded.first().copied() {
+            next.push(first);
+        }
+
+        let segment_count = if closed {
+            rounded.len()
+        } else {
+            rounded.len().saturating_sub(1)
+        };
+        for index in 0..segment_count {
+            let left = rounded[index];
+            let right = rounded[(index + 1) % rounded.len()];
+            next.push((
+                left.0.mul_add(0.75, right.0 * 0.25),
+                left.1.mul_add(0.75, right.1 * 0.25),
+            ));
+            next.push((
+                left.0.mul_add(0.25, right.0 * 0.75),
+                left.1.mul_add(0.25, right.1 * 0.75),
+            ));
+        }
+
+        if !closed && let Some(last) = rounded.last().copied() {
+            next.push(last);
+        }
+        rounded = next;
+    }
+
+    rounded
 }
 
 #[allow(
@@ -1308,7 +1357,11 @@ fn render_recipe(
     clippy::cast_possible_truncation,
     clippy::suboptimal_flops
 )]
-fn render_open_stroke(points: &[(f32, f32)], thickness: f32) -> Vec<Vec<(i16, i16)>> {
+fn render_open_stroke(
+    points: &[(f32, f32)],
+    thickness: f32,
+    cursive_score: f32,
+) -> Vec<Vec<(i16, i16)>> {
     if points.len() < 2 {
         return Vec::new();
     }
@@ -1332,8 +1385,11 @@ fn render_open_stroke(points: &[(f32, f32)], thickness: f32) -> Vec<Vec<(i16, i1
         let length = tangent_x.hypot(tangent_y).max(1.0);
         let normal_x = -tangent_y / length;
         let normal_y = tangent_x / length;
-        let edge_ratio = (index as f32) / (points.len() as f32);
-        let edge_thickness = thickness * edge_ratio.mul_add(0.15, 0.9);
+        let edge_ratio = (index as f32) / (points.len().saturating_sub(1).max(1) as f32);
+        let from_terminal = edge_ratio.min(1.0 - edge_ratio);
+        let terminal_taper = 1.0 - (cursive_score * 0.48);
+        let taper = terminal_taper + ((1.0 - terminal_taper) * (from_terminal * 3.0).min(1.0));
+        let edge_thickness = thickness * taper;
         left_edge.push((
             round_to_i16(point.0 + normal_x * edge_thickness),
             round_to_i16(point.1 + normal_y * edge_thickness),
