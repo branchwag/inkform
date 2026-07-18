@@ -316,11 +316,23 @@ const fn recipes_for_character(character: char) -> Option<&'static [StrokeRecipe
                 thickness_scale: 0.72,
             },
         ]),
-        'I' => Some(&[StrokeRecipe {
-            points: &[(250.0, 0.0), (260.0, 760.0)],
-            closed: false,
-            thickness_scale: 1.0,
-        }]),
+        'I' => Some(&[
+            StrokeRecipe {
+                points: &[(250.0, 35.0), (255.0, 725.0)],
+                closed: false,
+                thickness_scale: 1.0,
+            },
+            StrokeRecipe {
+                points: &[(115.0, 735.0), (255.0, 760.0), (395.0, 735.0)],
+                closed: false,
+                thickness_scale: 0.72,
+            },
+            StrokeRecipe {
+                points: &[(115.0, 25.0), (255.0, 0.0), (395.0, 25.0)],
+                closed: false,
+                thickness_scale: 0.72,
+            },
+        ]),
         'J' => Some(&[StrokeRecipe {
             points: &[
                 (420.0, 740.0),
@@ -1258,13 +1270,18 @@ const fn looped_recipes_for_character(character: char) -> Option<&'static [Strok
         'f' => Some(&[
             StrokeRecipe {
                 points: &[
-                    (235.0, -170.0),
-                    (245.0, 390.0),
-                    (140.0, 610.0),
-                    (225.0, 760.0),
-                    (345.0, 680.0),
-                    (330.0, 520.0),
-                    (245.0, 400.0),
+                    (265.0, 410.0),
+                    (150.0, 585.0),
+                    (220.0, 760.0),
+                    (350.0, 680.0),
+                    (335.0, 525.0),
+                    (255.0, 395.0),
+                    (235.0, 40.0),
+                    (185.0, -185.0),
+                    (100.0, -250.0),
+                    (65.0, -155.0),
+                    (145.0, -65.0),
+                    (235.0, -105.0),
                 ],
                 closed: false,
                 thickness_scale: 0.8,
@@ -1275,6 +1292,58 @@ const fn looped_recipes_for_character(character: char) -> Option<&'static [Strok
                 thickness_scale: 0.56,
             },
         ]),
+        'k' => Some(&[StrokeRecipe {
+            // Keep the ascender, upper arm, and lower arm in one pen motion,
+            // matching connected cursive rather than assembling a print `k`.
+            points: &[
+                (135.0, 15.0),
+                (140.0, 760.0),
+                (150.0, 395.0),
+                (325.0, 555.0),
+                (235.0, 355.0),
+                (390.0, 20.0),
+            ],
+            closed: false,
+            thickness_scale: 0.84,
+        }]),
+        'm' => Some(&[StrokeRecipe {
+            points: &[
+                (115.0, 20.0),
+                (125.0, 415.0),
+                (205.0, 320.0),
+                (250.0, 175.0),
+                (305.0, 315.0),
+                (340.0, 420.0),
+                (405.0, 325.0),
+                (445.0, 175.0),
+                (500.0, 315.0),
+                (515.0, 20.0),
+            ],
+            closed: false,
+            thickness_scale: 0.78,
+        }]),
+        'n' => Some(&[StrokeRecipe {
+            points: &[
+                (135.0, 20.0),
+                (145.0, 420.0),
+                (225.0, 320.0),
+                (305.0, 390.0),
+                (375.0, 20.0),
+            ],
+            closed: false,
+            thickness_scale: 0.78,
+        }]),
+        'r' => Some(&[StrokeRecipe {
+            points: &[
+                (145.0, 20.0),
+                (155.0, 415.0),
+                (235.0, 325.0),
+                (290.0, 355.0),
+                (315.0, 300.0),
+            ],
+            closed: false,
+            thickness_scale: 0.74,
+        }]),
         'g' => Some(&[
             StrokeRecipe {
                 points: &[
@@ -1682,4 +1751,51 @@ fn round_to_i16(value: f32) -> i16 {
             i16::MAX
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GlyphStyle, build_glyph_from_grammar};
+
+    const CURSIVE_STYLE: GlyphStyle = GlyphStyle {
+        slant: 50.0,
+        width_scale: 1.0,
+        stroke_width: 40.0,
+        waviness: 0.0,
+        baseline_lift: 0.0,
+        body_height: 360.0,
+        ascender_height: 700.0,
+        descender_depth: 220.0,
+        cursive_score: 0.8,
+    };
+
+    #[test]
+    fn cursive_variants_keep_connected_letters_in_one_trajectory() {
+        for character in ['k', 'm', 'n', 'r'] {
+            let Some(contours) = build_glyph_from_grammar(character, CURSIVE_STYLE, 7) else {
+                panic!("missing grammar for {character}");
+            };
+
+            assert_eq!(contours.len(), 1, "{character} should remain connected");
+        }
+    }
+
+    #[test]
+    fn capital_i_has_top_and_bottom_crossbars() {
+        let Some(contours) = build_glyph_from_grammar('I', CURSIVE_STYLE, 7) else {
+            panic!("missing grammar for capital I");
+        };
+
+        assert_eq!(contours.len(), 3);
+    }
+
+    #[test]
+    fn cursive_f_keeps_its_crossbar_and_looped_descender() {
+        let Some(contours) = build_glyph_from_grammar('f', CURSIVE_STYLE, 7) else {
+            panic!("missing grammar for f");
+        };
+
+        assert_eq!(contours.len(), 2);
+        assert!(contours[0].iter().any(|(_, y)| *y < -100));
+    }
 }

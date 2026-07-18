@@ -447,7 +447,7 @@ const fn supports_cursive_join(character: char) -> bool {
     // similar letters read as a different character.
     matches!(
         character,
-        'c' | 'e' | 'h' | 'i' | 'l' | 'm' | 'n' | 'r' | 's' | 't' | 'u' | 'v' | 'w' | 'x' | 'z'
+        'c' | 'e' | 'h' | 'i' | 'l' | 'm' | 's' | 't' | 'u' | 'v' | 'w' | 'x' | 'z'
     )
 }
 
@@ -2514,7 +2514,8 @@ mod tests {
         assert!(!supports_cursive_join('a'));
         assert!(!supports_cursive_join('o'));
         assert!(!supports_cursive_join('q'));
-        assert!(supports_cursive_join('n'));
-        assert!(supports_cursive_join('r'));
+        assert!(!supports_cursive_join('n'));
+        assert!(!supports_cursive_join('r'));
+        assert!(supports_cursive_join('m'));
     }
 }
