@@ -1,5 +1,5 @@
 use crate::domain::{GlyphCandidate, SampleImage, ScriptPack};
-use crate::extraction::{ExtractionResult, extract_handwriting};
+use crate::extraction::{ExtractionResult, extract_handwriting_with_transcript};
 use crate::glyph_grammar::{GlyphStyle, build_glyph_from_grammar};
 use image::{GrayImage, ImageReader, Luma};
 use std::collections::HashMap;
@@ -51,6 +51,7 @@ struct StyleProfile {
 
 #[derive(Debug, Clone)]
 struct ExtractedShape {
+    character: Option<char>,
     measures: ComponentMeasures,
     #[allow(dead_code)]
     outline: Vec<(i16, i16)>,
@@ -72,7 +73,17 @@ pub fn build_ttf(
     script_pack: &ScriptPack,
     glyphs: &[GlyphCandidate],
 ) -> Vec<u8> {
-    let generated_glyphs = build_generated_glyphs(sample_image, script_pack, glyphs);
+    build_ttf_with_transcript(family_name, sample_image, script_pack, glyphs, None)
+}
+
+pub fn build_ttf_with_transcript(
+    family_name: &str,
+    sample_image: &SampleImage,
+    script_pack: &ScriptPack,
+    glyphs: &[GlyphCandidate],
+    transcript: Option<&str>,
+) -> Vec<u8> {
+    let generated_glyphs = build_generated_glyphs(sample_image, script_pack, glyphs, transcript);
     let glyph_definitions = build_glyph_definitions_from_generated(&generated_glyphs);
     build_ttf_from_definitions(family_name, script_pack, &glyph_definitions)
 }
@@ -84,7 +95,18 @@ pub fn build_preview_svg(
     glyphs: &[GlyphCandidate],
     preview_text: &str,
 ) -> String {
-    let generated_glyphs = build_generated_glyphs(sample_image, script_pack, glyphs);
+    build_preview_svg_with_transcript(sample_image, script_pack, glyphs, preview_text, None)
+}
+
+#[must_use]
+pub fn build_preview_svg_with_transcript(
+    sample_image: &SampleImage,
+    script_pack: &ScriptPack,
+    glyphs: &[GlyphCandidate],
+    preview_text: &str,
+    transcript: Option<&str>,
+) -> String {
+    let generated_glyphs = build_generated_glyphs(sample_image, script_pack, glyphs, transcript);
     build_preview_svg_from_generated(&generated_glyphs, preview_text)
 }
 
@@ -154,9 +176,10 @@ fn build_generated_glyphs(
     sample_image: &SampleImage,
     script_pack: &ScriptPack,
     glyphs: &[GlyphCandidate],
+    transcript: Option<&str>,
 ) -> Vec<GeneratedGlyph> {
     let base_seed = hash_bytes(&sample_image.bytes);
-    let extraction_result = extract_handwriting(sample_image);
+    let extraction_result = extract_handwriting_with_transcript(sample_image, transcript);
     let decoded_sheet = decode_sheet(sample_image);
     build_glyph_shapes(
         base_seed,
@@ -248,6 +271,7 @@ fn build_glyph_shapes(
                 .glyphs
                 .iter()
                 .map(|glyph| ExtractedShape {
+                    character: glyph.character,
                     outline: glyph.outline.clone(),
                     measures: ComponentMeasures {
                         width_ratio: glyph.width_ratio,
@@ -261,7 +285,34 @@ fn build_glyph_shapes(
                 .collect::<Vec<_>>()
         },
     );
-    let style_profile = derive_style_profile(decoded_sheet, &extracted_shapes);
+    let style_profile = extraction_result.map_or_else(
+        || derive_style_profile(decoded_sheet, &extracted_shapes),
+        |result| {
+            // Preserve whole-stroke geometry for the global handwriting style;
+            // transcript slices are only reliable as character-specific anchors.
+            let style_shapes = result
+                .style_glyphs
+                .iter()
+                .map(|glyph| ExtractedShape {
+                    character: None,
+                    outline: Vec::new(),
+                    measures: ComponentMeasures {
+                        width_ratio: glyph.width_ratio,
+                        height_ratio: glyph.height_ratio,
+                        slant: glyph.slant,
+                        density: glyph.density,
+                        baseline_offset: glyph.baseline_offset,
+                        ink_area: glyph.ink_area,
+                    },
+                })
+                .collect::<Vec<_>>();
+            derive_style_profile(decoded_sheet, &style_shapes)
+        },
+    );
+    let transcript_anchors = extracted_shapes
+        .iter()
+        .filter_map(|shape| shape.character.map(|character| (character, shape)))
+        .collect::<HashMap<_, _>>();
     let mut generated = Vec::with_capacity(glyphs.len());
 
     for (glyph_index, character) in script_pack.glyphs.iter().enumerate() {
@@ -274,9 +325,19 @@ fn build_glyph_shapes(
         // glyphs that cannot appear in an arbitrary freeform upload.
         let style = glyph_style(style_profile, hinted_shape);
         let advance_width = glyph_advance_width(candidate, style);
-        let contours = build_glyph_from_grammar(candidate, style, seed)
-            .filter(|contours| !contours.is_empty())
-            .unwrap_or_else(|| algorithmic_contours(candidate, advance_width, seed, style_profile));
+        let contours = transcript_anchors
+            .get(&candidate)
+            .and_then(|shape| remix_shape_outline(shape, candidate, style_profile, seed))
+            .map_or_else(
+                || {
+                    build_glyph_from_grammar(candidate, style, seed)
+                        .filter(|contours| !contours.is_empty())
+                        .unwrap_or_else(|| {
+                            algorithmic_contours(candidate, advance_width, seed, style_profile)
+                        })
+                },
+                |outline| vec![outline],
+            );
         generated.push(GeneratedGlyph {
             character: candidate,
             advance_width,
@@ -392,8 +453,10 @@ fn derive_style_profile(
         body_height: clamp_f32(average_density.mul_add(140.0, 300.0), 290.0, 430.0),
         ascender_height: clamp_f32(average_width_ratio.mul_add(170.0, 560.0), 520.0, 760.0),
         descender_depth: clamp_f32(average_baseline_offset.mul_add(320.0, 120.0), 90.0, 240.0),
-        stroke_width: clamp_f32(average_density.mul_add(88.0, 34.0), 28.0, 110.0),
-        waviness: clamp_f32((1.0 - average_density).mul_add(54.0, 14.0), 12.0, 64.0),
+        // Freeform cursive samples are commonly sparse because they contain
+        // fine pen strokes, not because they should receive heavy jitter.
+        stroke_width: clamp_f32(average_density.mul_add(56.0, 16.0), 20.0, 76.0),
+        waviness: clamp_f32((1.0 - average_density).mul_add(24.0, 6.0), 8.0, 32.0),
         baseline_lift: clamp_f32(average_baseline_offset * 64.0, -18.0, 72.0),
         cursive_score,
     }
@@ -428,8 +491,8 @@ fn derive_style_profile_from_shapes(extracted_shapes: &[ExtractedShape]) -> Opti
         body_height: clamp_f32(average_density.mul_add(140.0, 300.0), 290.0, 430.0),
         ascender_height: clamp_f32(average_width_ratio.mul_add(170.0, 560.0), 520.0, 760.0),
         descender_depth: clamp_f32(average_baseline_offset.mul_add(320.0, 120.0), 90.0, 240.0),
-        stroke_width: clamp_f32(average_density.mul_add(88.0, 34.0), 28.0, 110.0),
-        waviness: clamp_f32((1.0 - average_density).mul_add(54.0, 14.0), 12.0, 64.0),
+        stroke_width: clamp_f32(average_density.mul_add(56.0, 16.0), 20.0, 76.0),
+        waviness: clamp_f32((1.0 - average_density).mul_add(24.0, 6.0), 8.0, 32.0),
         baseline_lift: clamp_f32(average_baseline_offset * 64.0, -18.0, 72.0),
         cursive_score,
     })
@@ -487,7 +550,11 @@ fn extract_shape_library(sheet: &GrayImage) -> Vec<ExtractedShape> {
         .filter_map(|component| {
             let measures = measure_component(component)?;
             let outline = build_shape_from_points(component)?;
-            Some(ExtractedShape { measures, outline })
+            Some(ExtractedShape {
+                character: None,
+                measures,
+                outline,
+            })
         })
         .collect::<Vec<_>>();
 
@@ -1991,15 +2058,14 @@ fn clamp_i32_to_i16(value: i32) -> i16 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ComponentMeasures, ExtractedShape, build_glyph_shapes, derive_style_profile, glyph_style,
-        mix_seed,
+        ComponentMeasures, ExtractedShape, build_glyph_shapes, derive_style_profile, mix_seed,
+        remix_shape_outline,
     };
     use crate::domain::{GlyphCandidate, ScriptPack};
     use crate::extraction::{ExtractedGlyph, ExtractionResult};
-    use crate::glyph_grammar::build_glyph_from_grammar;
 
     #[test]
-    fn glyph_grammar_uses_style_derived_from_extracted_handwriting() {
+    fn transcript_anchor_uses_confirmed_handwriting_outline() {
         let outline = vec![
             (48, 38),
             (120, 710),
@@ -2024,6 +2090,17 @@ mod tests {
         };
         let extraction = ExtractionResult {
             glyphs: vec![ExtractedGlyph {
+                character: Some('a'),
+                outline: outline.clone(),
+                width_ratio: measures.width_ratio,
+                height_ratio: measures.height_ratio,
+                slant: measures.slant,
+                density: measures.density,
+                baseline_offset: measures.baseline_offset,
+                ink_area: measures.ink_area,
+            }],
+            style_glyphs: vec![ExtractedGlyph {
+                character: None,
                 outline: outline.clone(),
                 width_ratio: measures.width_ratio,
                 height_ratio: measures.height_ratio,
@@ -2042,16 +2119,19 @@ mod tests {
             character: 'a',
             confidence_percent: 100,
         }];
-        let expected_shape = ExtractedShape { measures, outline };
+        let expected_shape = ExtractedShape {
+            character: Some('a'),
+            measures,
+            outline,
+        };
         let profile = derive_style_profile(None, std::slice::from_ref(&expected_shape));
         let seed = mix_seed(91, 'a');
-        let expected =
-            build_glyph_from_grammar('a', glyph_style(profile, Some(&expected_shape)), seed);
+        let expected = remix_shape_outline(&expected_shape, 'a', profile, seed);
 
         let generated = build_glyph_shapes(91, &script_pack, &candidates, None, Some(&extraction));
 
         assert_eq!(generated.len(), 1);
-        let expected = expected.into_iter().flatten().collect::<Vec<_>>();
+        let expected = expected.into_iter().collect::<Vec<_>>();
         assert_eq!(generated[0].contours, expected);
     }
 }

@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { loadGeneratedBrowserFont } from "../lib/browser-font-preview";
-import { generateInkformResult, type EngineMode } from "../lib/inkform-engine";
+import { generateInkformResult } from "../lib/inkform-engine";
 import type { GenerationResult } from "../lib/engine-types";
 
 const starterText = "The quick brown fox jumps over the lazy dog.";
@@ -12,9 +12,9 @@ const currentPreviewVersion = "svg-v3";
 export function GeneratorWorkbench() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewText, setPreviewText] = useState(starterText);
+  const [sampleTranscript, setSampleTranscript] = useState("");
   const [result, setResult] = useState<GenerationResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [engineMode, setEngineMode] = useState<EngineMode | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [previewFontFamily, setPreviewFontFamily] = useState<string | null>(null);
   const [previewFontState, setPreviewFontState] = useState<"idle" | "loaded" | "failed">("idle");
@@ -45,7 +45,6 @@ export function GeneratorWorkbench() {
     setSelectedFile(file);
     setResult(null);
     setErrorMessage(null);
-    setEngineMode(null);
     setPreviewFontFamily(null);
     setPreviewFontState("idle");
   }
@@ -65,11 +64,11 @@ export function GeneratorWorkbench() {
     setIsGenerating(true);
     setPreviewFontFamily(null);
     setPreviewFontState("idle");
-    const { engineMode: nextEngineMode, result: nextResult } = await generateInkformResult(
+    const { result: nextResult } = await generateInkformResult(
       activeFile,
-      previewText
+      previewText,
+      sampleTranscript
     );
-    setEngineMode(nextEngineMode);
     if (!nextResult.validation.accepted) {
       setErrorMessage(nextResult.validation.notes.at(-1) ?? "The sample could not be accepted.");
       setResult(nextResult);
@@ -180,6 +179,24 @@ export function GeneratorWorkbench() {
       <p style={{ margin: 0, color: "var(--muted)" }}>{selectedSummary}</p>
 
       <label style={{ display: "grid", gap: "0.5rem" }}>
+        <span>What does the sample say?</span>
+        <input
+          value={sampleTranscript}
+          onChange={(event) => setSampleTranscript(event.target.value)}
+          placeholder="For example: Hello!"
+          style={{
+            borderRadius: "18px",
+            border: "1px solid var(--border)",
+            padding: "0.9rem 1rem",
+            background: "var(--surface-strong)"
+          }}
+        />
+        <small style={{ color: "var(--muted)", lineHeight: 1.5 }}>
+          This is the text already in your photo. It lets Inkform use those real letters as anchors.
+        </small>
+      </label>
+
+      <label style={{ display: "grid", gap: "0.5rem" }}>
         <span>Preview text</span>
         <textarea
           value={previewText}
@@ -216,9 +233,13 @@ export function GeneratorWorkbench() {
 
       {result ? (
         <div style={{ display: "grid", gap: "1rem" }}>
-          <p style={{ margin: 0, color: "var(--muted)", fontSize: "0.95rem" }}>
-            Rendering mode: {engineMode === "wasm" ? "Rust engine" : "Compatibility fallback"}
-          </p>
+          {sampleTranscript.trim() ? (
+            <p style={{ margin: 0, color: "var(--muted)", fontSize: "0.95rem" }}>
+              {result.artifact.anchorCount > 0
+                ? `Using ${result.artifact.anchorCount} handwritten anchor${result.artifact.anchorCount === 1 ? "" : "s"} from your sample.`
+                : "Could not safely align the transcript with the sample, so Inkform used style synthesis."}
+            </p>
+          ) : null}
           <article
             style={{
               padding: "1.25rem",
@@ -373,17 +394,6 @@ export function GeneratorWorkbench() {
             </article>
           </div>
 
-          {engineMode === "fallback" ? (
-            <p style={{ margin: 0, color: "var(--muted)", fontSize: "0.95rem" }}>
-              Inkform used a fallback preview path this time. If the Rust build has already been
-              generated, restarting the dev server should switch this to the browser-side Rust engine.
-            </p>
-          ) : null}
-          {engineMode === "wasm" ? (
-            <p style={{ margin: 0, color: "var(--muted)", fontSize: "0.95rem" }}>
-              This preview was generated with the browser-side Rust engine.
-            </p>
-          ) : null}
         </div>
       ) : null}
     </section>

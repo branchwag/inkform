@@ -12,9 +12,10 @@ pub use crate::domain::{
     ProcessingStage, SampleImage, SampleQuality, ScriptPack, ValidationReport,
 };
 pub use crate::error::{InkformError, InkformErrorKind};
-pub use crate::generation::generate_font;
+pub use crate::extraction::extract_handwriting_with_transcript;
+pub use crate::generation::{generate_font, generate_font_with_transcript};
 pub use crate::preview::{PREVIEW_VERSION, preview_text};
-pub use crate::ttf::build_preview_svg;
+pub use crate::ttf::{build_preview_svg, build_preview_svg_with_transcript};
 pub use crate::validation::validate_sample;
 
 #[cfg(test)]

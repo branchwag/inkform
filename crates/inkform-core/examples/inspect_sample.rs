@@ -1,4 +1,7 @@
-use inkform_core::{SampleImage, SampleQuality, ScriptPack, generate_font};
+use inkform_core::{
+    SampleImage, SampleQuality, ScriptPack, build_preview_svg_with_transcript,
+    extract_handwriting_with_transcript, generate_font_with_transcript,
+};
 use std::env;
 use std::fs;
 use ttf_parser::{Face, OutlineBuilder};
@@ -36,9 +39,11 @@ impl OutlineBuilder for CountingBuilder {
 }
 
 fn main() -> Result<(), String> {
-    let image_path = env::args().nth(1).ok_or_else(|| {
+    let mut arguments = env::args().skip(1);
+    let image_path = arguments.next().ok_or_else(|| {
         String::from("usage: cargo run -p inkform-core --example inspect_sample -- <image-path>")
     })?;
+    let transcript = arguments.next();
 
     let bytes = fs::read(&image_path)
         .map_err(|error| format!("could not read sample image '{image_path}': {error}"))?;
@@ -52,7 +57,9 @@ fn main() -> Result<(), String> {
         quality: SampleQuality::Clean,
     };
     let script_pack = ScriptPack::latin_extended();
-    let artifact = generate_font(&sample, &script_pack)
+    let extracted_component_count =
+        extract_handwriting_with_transcript(&sample, None).map_or(0, |result| result.glyphs.len());
+    let artifact = generate_font_with_transcript(&sample, &script_pack, transcript.as_deref())
         .map_err(|error| format!("font generation failed for '{image_path}': {error}"))?;
     let face = Face::parse(&artifact.binary, 0)
         .map_err(|error| format!("generated TTF failed to parse for '{image_path}': {error:?}"))?;
@@ -60,10 +67,40 @@ fn main() -> Result<(), String> {
     let output_path = String::from("/tmp/inkform-inspect.ttf");
     fs::write(&output_path, &artifact.binary)
         .map_err(|error| format!("could not write '{output_path}': {error}"))?;
+    let preview_path = String::from("/tmp/inkform-inspect.svg");
+    let preview = build_preview_svg_with_transcript(
+        &sample,
+        &script_pack,
+        &artifact.glyphs,
+        "Hello! The quick brown fox jumps over the lazy dog.",
+        transcript.as_deref(),
+    );
+    fs::write(&preview_path, preview)
+        .map_err(|error| format!("could not write '{preview_path}': {error}"))?;
 
     println!("sample={image_path}");
     println!("dimensions={}x{}", sample.width, sample.height);
     println!("glyph_count={}", artifact.glyphs.len());
+    println!("anchor_count={}", artifact.anchor_count);
+    println!("extracted_component_count={extracted_component_count}");
+    if let Some(extraction) = extract_handwriting_with_transcript(&sample, None) {
+        for (index, glyph) in extraction.glyphs.iter().enumerate() {
+            println!(
+                "component={index} width_ratio={:.3} height_ratio={:.3} density={:.3} slant={:.3}",
+                glyph.width_ratio, glyph.height_ratio, glyph.density, glyph.slant
+            );
+        }
+    }
+    if let Some(transcript) = transcript.as_deref()
+        && let Some(extraction) = extract_handwriting_with_transcript(&sample, Some(transcript))
+    {
+        for (index, glyph) in extraction.glyphs.iter().enumerate() {
+            println!(
+                "anchor_component={index} character={:?} width_ratio={:.3}",
+                glyph.character, glyph.width_ratio
+            );
+        }
+    }
     println!("binary_size={}", artifact.binary.len());
     println!("ttf_glyph_count={}", face.number_of_glyphs());
     println!("has_A={}", face.glyph_index('A').is_some());
@@ -86,6 +123,7 @@ fn main() -> Result<(), String> {
         );
     }
     println!("output={output_path}");
+    println!("preview={preview_path}");
 
     Ok(())
 }

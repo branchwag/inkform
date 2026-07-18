@@ -7,7 +7,8 @@ type WasmModule = {
     bytes: Uint8Array,
     width: number,
     height: number,
-    previewText: string
+    previewText: string,
+    transcript: string
   ) => string;
 };
 
@@ -20,7 +21,8 @@ export type EngineRun = {
 
 export async function generateInkformResult(
   file: File,
-  previewText: string
+  previewText: string,
+  transcript: string
 ): Promise<EngineRun> {
   const wasmModule = await loadWasmModule();
   if (wasmModule !== null) {
@@ -30,7 +32,8 @@ export async function generateInkformResult(
         bytes,
         dimensions.width,
         dimensions.height,
-        previewText
+        previewText,
+        transcript
       );
 
       return {

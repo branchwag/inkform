@@ -1,7 +1,8 @@
 use inkform_core::{
     FontArtifact, InkformError, InkformErrorKind, PREVIEW_VERSION, PreviewRequest, PreviewResponse,
-    SampleImage, SampleQuality, ScriptPack, ValidationReport, build_preview_svg, generate_font,
-    preview_text, validate_sample,
+    SampleImage, SampleQuality, ScriptPack, ValidationReport, build_preview_svg,
+    build_preview_svg_with_transcript, generate_font, generate_font_with_transcript, preview_text,
+    validate_sample,
 };
 use wasm_bindgen::prelude::*;
 
@@ -23,6 +24,7 @@ pub fn generate_font_json(
     width: u32,
     height: u32,
     preview_text: &str,
+    transcript: &str,
 ) -> Result<String, JsError> {
     let sample = SampleImage {
         width,
@@ -33,12 +35,22 @@ pub fn generate_font_json(
     let script_pack = ScriptPack::latin_extended();
     let validation_report =
         validate_sample(&sample, &script_pack).map_err(|error| map_to_js_error(&error))?;
-    let font_artifact =
-        generate_font(&sample, &script_pack).map_err(|error| map_to_js_error(&error))?;
+    let transcript = (!transcript.trim().is_empty()).then_some(transcript);
+    let font_artifact = generate_font_with_transcript(&sample, &script_pack, transcript)
+        .map_err(|error| map_to_js_error(&error))?;
     let preview_response = preview_generated_text(&font_artifact, preview_text)
         .map_err(|error| map_to_js_error(&error))?;
     let preview_response = PreviewResponse {
-        svg_markup: build_preview_svg(&sample, &script_pack, &font_artifact.glyphs, preview_text),
+        svg_markup: match transcript {
+            Some(transcript) => build_preview_svg_with_transcript(
+                &sample,
+                &script_pack,
+                &font_artifact.glyphs,
+                preview_text,
+                Some(transcript),
+            ),
+            None => build_preview_svg(&sample, &script_pack, &font_artifact.glyphs, preview_text),
+        },
         ..preview_response
     };
 
@@ -164,6 +176,7 @@ fn build_generation_payload(
             "\"familyName\":\"{}\",",
             "\"scriptPackId\":\"{}\",",
             "\"glyphCount\":{},",
+            "\"anchorCount\":{},",
             "\"binaryLabel\":\"{}\",",
             "\"binaryHash\":\"{}\",",
             "\"downloadName\":\"{}\",",
@@ -184,6 +197,7 @@ fn build_generation_payload(
         escape_json(&font_artifact.family_name),
         escape_json(&font_artifact.script_pack_id),
         font_artifact.glyphs.len(),
+        font_artifact.anchor_count,
         escape_json("inkform-wasm-artifact"),
         escape_json(&binary_hash),
         escape_json("inkform-preview.ttf"),

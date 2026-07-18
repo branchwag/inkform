@@ -35,6 +35,13 @@
   synthesize complete, legible character topology for freeform samples
 - Cursive samples additionally drive grammar centerline rounding and open-stroke terminal taper;
   do not add disconnected pseudo-ligature strokes without contextual shaping support
+- The optional sample transcript describes text already visible in the uploaded photo. For a
+  single line, Inkform isolates terminal punctuation, partitions the word at low-ink valleys using
+  transcript-derived character-width targets, and accepts anchors only when every extracted region
+  passes shape validation. It must fall back to style synthesis when those checks fail
+- A real `Hello!` sample can produce overlapping connected-stroke regions plus separate
+  punctuation strokes. Preserve the transcript-aligned segmentation confidence checks; never map
+  raw components monotonically to characters
 
 ## Rust Coding Constraints
 

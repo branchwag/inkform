@@ -49,6 +49,7 @@ export function generateDemoResult(file: File, previewText: string): GenerationR
       familyName: "Inkform Preview",
       scriptPackId: "latin-extended",
       glyphCount: validation.glyphTargetCount,
+      anchorCount: 0,
       binaryLabel: `inkform-demo-${file.name.replace(/\s+/g, "-").toLowerCase()}`,
       binaryHash: `${file.size.toString(16)}-${normalizedPreview.length.toString(16)}`,
       downloadName: "inkform-preview-package.txt",

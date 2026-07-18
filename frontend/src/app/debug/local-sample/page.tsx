@@ -39,7 +39,7 @@ export default function LocalSampleDebugPage() {
         const fileName = response.headers.get("X-Inkform-Debug-File") ?? "local-sample.jpg";
         const blob = await response.blob();
         const file = new File([blob], fileName, { type: blob.type || "image/jpeg" });
-        const { engineMode, result } = await generateInkformResult(file, previewText);
+        const { engineMode, result } = await generateInkformResult(file, previewText, "");
 
         if (!cancelled) {
           setState({

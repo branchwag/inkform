@@ -49,6 +49,7 @@ pub struct FontArtifact {
     pub family_name: String,
     pub script_pack_id: String,
     pub glyphs: Vec<GlyphCandidate>,
+    pub anchor_count: usize,
     pub binary: Vec<u8>,
 }
 

@@ -10,6 +10,7 @@ export type FontArtifact = {
   familyName: string;
   scriptPackId: ScriptPackId;
   glyphCount: number;
+  anchorCount: number;
   binaryLabel: string;
   binaryHash: string;
   downloadName: string;

@@ -4,9 +4,20 @@ use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 
 const MAX_BOUNDARY_POINTS: usize = 96;
+type InkPoints = Vec<(usize, usize)>;
+
+#[derive(Debug)]
+struct PositionedComponent {
+    min_x: usize,
+    max_y: usize,
+    height: usize,
+    line: usize,
+    points: InkPoints,
+}
 
 #[derive(Debug, Clone)]
 pub struct ExtractedGlyph {
+    pub character: Option<char>,
     pub outline: Vec<(i16, i16)>,
     pub width_ratio: f32,
     pub height_ratio: f32,
@@ -19,37 +30,320 @@ pub struct ExtractedGlyph {
 #[derive(Debug, Clone)]
 pub struct ExtractionResult {
     pub glyphs: Vec<ExtractedGlyph>,
+    pub style_glyphs: Vec<ExtractedGlyph>,
 }
 
-pub fn extract_handwriting(sample_image: &SampleImage) -> Option<ExtractionResult> {
+#[must_use]
+pub fn extract_handwriting_with_transcript(
+    sample_image: &SampleImage,
+    transcript: Option<&str>,
+) -> Option<ExtractionResult> {
     let image = decode_image(sample_image)?;
     let ink_threshold = estimate_ink_threshold(&image);
     let components = extract_ink_components(&image, ink_threshold)?;
 
-    let mut glyphs = Vec::new();
-    for points in components {
-        if !is_handwriting_component(&points) {
-            continue;
+    let components = components
+        .into_iter()
+        .filter(|points| is_handwriting_component(points))
+        .collect::<Vec<_>>();
+    let components = order_components_in_reading_order(components);
+    let style_glyphs = components
+        .iter()
+        .filter_map(|points| extracted_glyph_from_points(points, None))
+        .collect::<Vec<_>>();
+    let transcript_characters = transcript.map(|value| {
+        value
+            .chars()
+            // Punctuation is commonly split into dots and detached strokes.
+            // Anchor only characters that can be matched to a full ink component.
+            .filter(|character| character.is_alphanumeric())
+            .collect::<Vec<_>>()
+    });
+    let has_terminal_punctuation = transcript.is_some_and(|value| {
+        value
+            .trim_end()
+            .chars()
+            .last()
+            .is_some_and(|character| !character.is_alphanumeric())
+    });
+    let (components, aligned_characters) = match transcript_characters {
+        Some(characters) => {
+            let mut components = components;
+            if transcript.is_some_and(|value| !value.contains('\n')) {
+                // The transcript describes one visual line, so horizontal
+                // order is more reliable than ascender/descender bounds.
+                components.sort_by_key(|points| {
+                    points
+                        .iter()
+                        .map(|(x, _)| *x)
+                        .min()
+                        .map_or(usize::MAX, |min_x| min_x)
+                });
+            }
+            let segmented =
+                align_transcript_to_ink(&components, &characters, has_terminal_punctuation);
+            segmented.map_or_else(|| (components, None), |glyphs| (glyphs, Some(characters)))
         }
-
-        let outline = normalize_outline_to_font(&trace_component_boundary(&points)?)?;
-        let measures = measure_component(&points)?;
-        glyphs.push(ExtractedGlyph {
-            outline,
-            width_ratio: measures.width_ratio,
-            height_ratio: measures.height_ratio,
-            slant: measures.slant,
-            density: measures.density,
-            baseline_offset: measures.baseline_offset,
-            ink_area: measures.ink_area,
-        });
+        None => (components, None),
+    };
+    let mut glyphs = Vec::new();
+    for (index, points) in components.into_iter().enumerate() {
+        let character = aligned_characters
+            .as_ref()
+            .and_then(|characters| characters.get(index).copied());
+        if let Some(glyph) = extracted_glyph_from_points(&points, character) {
+            glyphs.push(glyph);
+        }
     }
 
     if glyphs.is_empty() {
         return None;
     }
 
-    Some(ExtractionResult { glyphs })
+    Some(ExtractionResult {
+        glyphs,
+        style_glyphs,
+    })
+}
+
+fn extracted_glyph_from_points(
+    points: &[(usize, usize)],
+    character: Option<char>,
+) -> Option<ExtractedGlyph> {
+    let outline = normalize_outline_to_font(&trace_component_boundary(points)?)?;
+    let measures = measure_component(points)?;
+    Some(ExtractedGlyph {
+        character,
+        outline,
+        width_ratio: measures.width_ratio,
+        height_ratio: measures.height_ratio,
+        slant: measures.slant,
+        density: measures.density,
+        baseline_offset: measures.baseline_offset,
+        ink_area: measures.ink_area,
+    })
+}
+
+#[cfg(test)]
+fn align_components_to_transcript(
+    component_count: usize,
+    characters: &[char],
+) -> Option<Vec<char>> {
+    // A connected component can be a whole cursive word. Assigning it to the
+    // nearest transcript character silently corrupts the generated glyph.
+    if component_count == 0 || component_count != characters.len() {
+        return None;
+    }
+
+    Some(characters.to_vec())
+}
+
+fn align_transcript_to_ink(
+    components: &[InkPoints],
+    characters: &[char],
+    has_terminal_punctuation: bool,
+) -> Option<Vec<InkPoints>> {
+    if characters.len() < 2 || characters.len() > 24 {
+        return None;
+    }
+
+    let word_components = trim_terminal_punctuation(components, has_terminal_punctuation)?;
+    let word_points = word_components
+        .iter()
+        .flat_map(|points| points.iter().copied())
+        .collect::<InkPoints>();
+    let min_x = word_points.iter().map(|(x, _)| *x).min()?;
+    let max_x = word_points.iter().map(|(x, _)| *x).max()?;
+    let width = max_x.checked_sub(min_x)?.checked_add(1)?;
+    if width < characters.len().checked_mul(18)? {
+        return None;
+    }
+
+    let ink_per_column = ink_projection(&word_points, min_x, width)?;
+    let boundaries = transcript_boundaries(&ink_per_column, characters)?;
+    let mut glyphs = Vec::with_capacity(characters.len());
+    let mut segment_start = 0_usize;
+    for segment_end in boundaries.into_iter().chain(std::iter::once(width)) {
+        let glyph = word_points
+            .iter()
+            .filter_map(|(x, y)| {
+                let column = x.checked_sub(min_x)?;
+                (segment_start <= column && column < segment_end).then_some((*x, *y))
+            })
+            .collect::<InkPoints>();
+        if !is_handwriting_component(&glyph) {
+            return None;
+        }
+        glyphs.push(glyph);
+        segment_start = segment_end;
+    }
+
+    (glyphs.len() == characters.len()).then_some(glyphs)
+}
+
+fn trim_terminal_punctuation(
+    components: &[InkPoints],
+    has_terminal_punctuation: bool,
+) -> Option<&[InkPoints]> {
+    if components.is_empty() || !has_terminal_punctuation {
+        return Some(components);
+    }
+
+    let mut spans = components
+        .iter()
+        .enumerate()
+        .filter_map(|(index, points)| {
+            let min_x = points.iter().map(|(x, _)| *x).min()?;
+            let max_x = points.iter().map(|(x, _)| *x).max()?;
+            Some((index, min_x, max_x))
+        })
+        .collect::<Vec<_>>();
+    spans.sort_by_key(|(_, min_x, _)| *min_x);
+
+    let mut word_end = spans.first()?.2;
+    let mut best_gap = 0_usize;
+    let mut punctuation_start = None;
+    for (index, min_x, max_x) in spans.iter().skip(1) {
+        let gap = min_x.saturating_sub(word_end);
+        if gap > best_gap {
+            best_gap = gap;
+            punctuation_start = Some(*index);
+        }
+        word_end = word_end.max(*max_x);
+    }
+
+    let full_min_x = spans.first()?.1;
+    let full_max_x = spans.iter().map(|(_, _, max_x)| *max_x).max()?;
+    let full_width = full_max_x.checked_sub(full_min_x)?.checked_add(1)?;
+    let required_gap = (full_width / 18).max(24);
+    let punctuation_start = punctuation_start.filter(|_| best_gap >= required_gap)?;
+    components.get(..punctuation_start)
+}
+
+fn ink_projection(points: &[(usize, usize)], min_x: usize, width: usize) -> Option<Vec<usize>> {
+    let mut projection = vec![0_usize; width];
+    for (x, _) in points {
+        let column = x.checked_sub(min_x)?;
+        *projection.get_mut(column)? += 1;
+    }
+    Some(projection)
+}
+
+fn transcript_boundaries(projection: &[usize], characters: &[char]) -> Option<Vec<usize>> {
+    let width = projection.len();
+    let total_weight = characters
+        .iter()
+        .map(|character| character_width_weight(*character))
+        .sum::<usize>();
+    if total_weight == 0 || width < characters.len().checked_mul(18)? {
+        return None;
+    }
+
+    let average_ink = projection.iter().sum::<usize>() / width.max(1);
+    let mut boundaries = Vec::with_capacity(characters.len().saturating_sub(1));
+    let mut consumed_weight = 0_usize;
+    let min_segment_width = (width / (characters.len().saturating_mul(3))).max(12);
+    for character in &characters[..characters.len().saturating_sub(1)] {
+        consumed_weight = consumed_weight.saturating_add(character_width_weight(*character));
+        let target = width.saturating_mul(consumed_weight) / total_weight;
+        let search_radius = (width / characters.len()).max(24);
+        let previous_boundary = boundaries.last().copied().map_or(0_usize, |value| value);
+        let lower = target
+            .saturating_sub(search_radius)
+            .max(previous_boundary.saturating_add(min_segment_width));
+        let remaining = characters.len().saturating_sub(boundaries.len() + 1);
+        let upper = target
+            .saturating_add(search_radius)
+            .min(width.saturating_sub(remaining.saturating_mul(min_segment_width)));
+        if lower >= upper {
+            return None;
+        }
+
+        let (boundary, ink) = (lower..upper)
+            .map(|column| {
+                let ink = projection
+                    .get(column)
+                    .copied()
+                    .map_or(usize::MAX, |value| value);
+                (column, ink)
+            })
+            .min_by_key(|(column, ink)| (*ink, column.abs_diff(target)))?;
+        // Joined cursive letters retain a narrow connector at the best cut.
+        // The region checks below guard against accepting a heavy interior stroke.
+        if ink > average_ink.saturating_mul(2).max(4) {
+            return None;
+        }
+        boundaries.push(boundary);
+    }
+
+    Some(boundaries)
+}
+
+const fn character_width_weight(character: char) -> usize {
+    match character {
+        // Cursive capitals and looped ascenders are wider than their
+        // typeset counterparts because they carry entry and exit strokes.
+        'A'..='Z' | 'm' | 'w' => 18,
+        'l' | 'f' => 12,
+        't' => 10,
+        'i' | 'j' => 7,
+        'r' | 's' | 'c' => 9,
+        _ => 11,
+    }
+}
+
+fn order_components_in_reading_order(components: Vec<InkPoints>) -> Vec<InkPoints> {
+    let mut positioned = components
+        .into_iter()
+        .filter_map(|points| {
+            let min_x = points.iter().map(|(x, _)| *x).min()?;
+            let min_y = points.iter().map(|(_, y)| *y).min()?;
+            let max_y = points.iter().map(|(_, y)| *y).max()?;
+            Some(PositionedComponent {
+                min_x,
+                max_y,
+                height: max_y.saturating_sub(min_y).saturating_add(1),
+                line: 0,
+                points,
+            })
+        })
+        .collect::<Vec<_>>();
+    if positioned.len() < 2 {
+        return positioned
+            .into_iter()
+            .map(|component| component.points)
+            .collect();
+    }
+
+    let mut heights = positioned
+        .iter()
+        .map(|component| component.height)
+        .collect::<Vec<_>>();
+    heights.sort_unstable();
+    let median_height = heights
+        .get(heights.len() / 2)
+        .copied()
+        .map_or(1, |height| height);
+    // Ascenders and decorative capital strokes can finish much lower than the
+    // rest of a handwritten line. Keep that variation in the same line.
+    let line_tolerance = median_height.max(32);
+
+    positioned.sort_by_key(|component| component.max_y);
+    let mut line = 0_usize;
+    let mut previous_baseline = positioned.first().map_or(0, |component| component.max_y);
+    for component in &mut positioned {
+        if component.max_y.saturating_sub(previous_baseline) > line_tolerance {
+            line = line.saturating_add(1);
+        }
+        component.line = line;
+        previous_baseline = component.max_y;
+    }
+    positioned.sort_by_key(|component| (component.line, component.min_x));
+
+    positioned
+        .into_iter()
+        .map(|component| component.points)
+        .collect()
 }
 
 fn decode_image(sample_image: &SampleImage) -> Option<GrayImage> {
@@ -407,7 +701,10 @@ fn clamp_i32_to_i16(value: i32) -> i16 {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_handwriting;
+    use super::{
+        align_components_to_transcript, align_transcript_to_ink,
+        extract_handwriting_with_transcript, order_components_in_reading_order,
+    };
     use crate::domain::{SampleImage, SampleQuality};
     use image::{ColorType, GrayImage, ImageEncoder, Luma, codecs::png::PngEncoder};
 
@@ -427,7 +724,7 @@ mod tests {
             quality: SampleQuality::Clean,
         };
 
-        let result = extract_handwriting(&sample);
+        let result = extract_handwriting_with_transcript(&sample, None);
         assert!(result.is_some(), "synthetic handwriting should extract");
         let Some(extracted) = result else {
             panic!("missing extraction result");
@@ -444,12 +741,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn refuses_transcript_alignment_when_components_are_merged() {
+        let transcript = ['H', 'e', 'l', 'l', 'o'];
+
+        assert!(align_components_to_transcript(4, &transcript).is_none());
+    }
+
+    #[test]
+    fn aligns_only_exact_component_and_transcript_counts() {
+        let transcript = ['H', 'e', 'l', 'l', 'o'];
+
+        assert_eq!(
+            align_components_to_transcript(5, &transcript),
+            Some(transcript.to_vec())
+        );
+    }
+
+    #[test]
+    fn aligns_transcript_to_low_ink_character_boundaries() {
+        let mut word = rectangle_points(10, 20, 52, 70);
+        word.extend(rectangle_points(78, 42, 34, 42));
+        word.extend(rectangle_points(128, 18, 20, 70));
+        word.extend(rectangle_points(164, 18, 20, 70));
+        word.extend(rectangle_points(200, 42, 34, 42));
+        let transcript = ['H', 'e', 'l', 'l', 'o'];
+
+        let aligned = align_transcript_to_ink(&[word], &transcript, false);
+
+        assert!(aligned.is_some());
+        assert_eq!(aligned.map_or(0, |glyphs| glyphs.len()), transcript.len());
+    }
+
+    #[test]
+    fn orders_a_single_handwritten_line_by_horizontal_position() {
+        let tall_left = rectangle_points(10, 8, 20, 96);
+        let short_right = rectangle_points(70, 48, 22, 32);
+
+        let ordered = order_components_in_reading_order(vec![short_right, tall_left]);
+        let first_min_x = ordered
+            .first()
+            .and_then(|points| points.iter().map(|(x, _)| *x).min());
+
+        assert_eq!(first_min_x, Some(10));
+    }
+
     fn draw_rect(image: &mut GrayImage, x: u32, y: u32, width: u32, height: u32) {
         for row in y..(y + height) {
             for column in x..(x + width) {
                 image.put_pixel(column, row, Luma([0_u8]));
             }
         }
+    }
+
+    fn rectangle_points(x: usize, y: usize, width: usize, height: usize) -> Vec<(usize, usize)> {
+        let mut points = Vec::with_capacity(width.saturating_mul(height));
+        for row in y..y.saturating_add(height) {
+            for column in x..x.saturating_add(width) {
+                points.push((column, row));
+            }
+        }
+        points
     }
 
     fn encode_png(image: &GrayImage) -> Vec<u8> {
