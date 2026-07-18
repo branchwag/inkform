@@ -30,13 +30,14 @@ export function GeneratorWorkbench() {
     result !== null &&
     result.preview.previewVersion === currentPreviewVersion &&
     result.preview.svgMarkup.includes("<svg");
+  const shouldShowSvgFallback = hasCurrentSvgPreview && previewFontState !== "loaded";
   const previewSvgDataUrl = useMemo(() => {
-    if (!hasCurrentSvgPreview || result === null) {
+    if (!shouldShowSvgFallback || result === null) {
       return null;
     }
 
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(result.preview.svgMarkup)}`;
-  }, [hasCurrentSvgPreview, result]);
+  }, [result, shouldShowSvgFallback]);
 
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
@@ -99,8 +100,7 @@ export function GeneratorWorkbench() {
   useEffect(() => {
     if (
       result === null ||
-      result.artifact.mimeType !== "font/ttf" ||
-      hasCurrentSvgPreview
+      result.artifact.mimeType !== "font/ttf"
     ) {
       return;
     }
@@ -136,7 +136,7 @@ export function GeneratorWorkbench() {
       document.fonts.delete(fontFace);
       URL.revokeObjectURL(objectUrl);
     };
-  }, [hasCurrentSvgPreview, result]);
+  }, [result]);
 
   return (
     <section
@@ -237,7 +237,20 @@ export function GeneratorWorkbench() {
             >
               Preview
             </p>
-            {hasCurrentSvgPreview ? (
+            {previewFontState === "loaded" ? (
+              <h3
+                style={{
+                  marginBottom: "0.75rem",
+                  fontSize: "1.8rem",
+                  fontFamily:
+                    previewFontFamily === null
+                      ? 'Georgia, "Times New Roman", serif'
+                      : `"${previewFontFamily}", Georgia, "Times New Roman", serif`
+                }}
+              >
+                {previewText.trim() || starterText}
+              </h3>
+            ) : hasCurrentSvgPreview ? (
               <div
                 style={{
                   marginTop: "0.75rem",

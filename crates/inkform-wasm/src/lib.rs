@@ -1,7 +1,7 @@
 use inkform_core::{
-    FontArtifact, InkformError, InkformErrorKind, PreviewRequest, PreviewResponse, SampleImage,
-    PREVIEW_VERSION, SampleQuality, ScriptPack, ValidationReport, build_preview_svg,
-    generate_font, preview_text, validate_sample,
+    FontArtifact, InkformError, InkformErrorKind, PREVIEW_VERSION, PreviewRequest, PreviewResponse,
+    SampleImage, SampleQuality, ScriptPack, ValidationReport, build_preview_svg, generate_font,
+    preview_text, validate_sample,
 };
 use wasm_bindgen::prelude::*;
 

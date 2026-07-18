@@ -1542,67 +1542,75 @@ fn build_preview_svg_from_generated(
         .iter()
         .map(|glyph| (glyph.character, glyph))
         .collect::<HashMap<_, _>>();
-    let preview_scale = 0.42_f32;
-    let line_height = 420_i32;
-    let baseline_offset = 320_i32;
+    let preview_scale = 0.18_f32;
+    let line_height = 220_i32;
+    let baseline_offset = 170_i32;
     let left_padding = 40_i32;
-    let max_line_width = 1360_i32;
+    let max_line_width = 1240_i32;
     let mut x = left_padding;
     let mut y = baseline_offset;
     let mut max_x = left_padding;
     let mut max_y = baseline_offset + 80;
     let mut path_data = String::new();
 
-    for character in preview_text.chars() {
-        if character == '\n' {
-            x = left_padding;
-            y += line_height;
-            max_y = max_y.max(y + 80);
-            continue;
-        }
-
-        let Some(glyph) = glyph_map.get(&character) else {
-            x += scale_preview_value(220, preview_scale);
-            max_x = max_x.max(x);
-            continue;
-        };
-
-        let advance_width = scale_preview_value(i32::from(glyph.advance_width), preview_scale);
-        if character != ' ' && x > left_padding && x + advance_width > max_line_width {
-            x = left_padding;
-            y += line_height;
-            max_y = max_y.max(y + 80);
-        }
-
-        for contour in &glyph.contours {
-            if contour.len() < 2 {
-                continue;
+    for line in preview_text.lines() {
+        let segments = split_preview_segments(line);
+        for segment in &segments {
+            let segment_width = preview_segment_width(segment, &glyph_map, preview_scale);
+            if !segment.chars().all(char::is_whitespace)
+                && x > left_padding
+                && x + segment_width > max_line_width
+            {
+                x = left_padding;
+                y += line_height;
+                max_y = max_y.max(y + 80);
             }
 
-            let mut contour_iter = contour.iter();
-            let Some((first_x, first_y)) = contour_iter.next() else {
-                continue;
-            };
-            let _ = write!(
-                path_data,
-                "M{} {}",
-                x + scale_preview_value(i32::from(*first_x), preview_scale),
-                y - scale_preview_value(i32::from(*first_y), preview_scale)
-            );
-            for (point_x, point_y) in contour_iter {
-                let _ = write!(
-                    path_data,
-                    " L{} {}",
-                    x + scale_preview_value(i32::from(*point_x), preview_scale),
-                    y - scale_preview_value(i32::from(*point_y), preview_scale)
-                );
+            for character in segment.chars() {
+                let Some(glyph) = glyph_map.get(&character) else {
+                    x += scale_preview_value(220, preview_scale);
+                    max_x = max_x.max(x);
+                    continue;
+                };
+
+                let advance_width =
+                    scale_preview_value(i32::from(glyph.advance_width), preview_scale);
+
+                for contour in &glyph.contours {
+                    if contour.len() < 2 {
+                        continue;
+                    }
+
+                    let mut contour_iter = contour.iter();
+                    let Some((first_x, first_y)) = contour_iter.next() else {
+                        continue;
+                    };
+                    let _ = write!(
+                        path_data,
+                        "M{} {}",
+                        x + scale_preview_value(i32::from(*first_x), preview_scale),
+                        y - scale_preview_value(i32::from(*first_y), preview_scale)
+                    );
+                    for (point_x, point_y) in contour_iter {
+                        let _ = write!(
+                            path_data,
+                            " L{} {}",
+                            x + scale_preview_value(i32::from(*point_x), preview_scale),
+                            y - scale_preview_value(i32::from(*point_y), preview_scale)
+                        );
+                    }
+                    path_data.push_str(" Z ");
+                }
+
+                x += advance_width;
+                max_x = max_x.max(x);
+                max_y = max_y.max(y + 120);
             }
-            path_data.push_str(" Z ");
         }
 
-        x += advance_width;
-        max_x = max_x.max(x);
-        max_y = max_y.max(y + 120);
+        x = left_padding;
+        y += line_height;
+        max_y = max_y.max(y + 80);
     }
 
     if path_data.trim().is_empty() {
@@ -1623,12 +1631,48 @@ fn build_preview_svg_from_generated(
             "<path d=\"{}\" fill=\"#1f1611\"/>",
             "</svg>"
         ),
-        svg_width,
-        svg_height,
-        svg_width,
-        svg_height,
-        path_data
+        svg_width, svg_height, svg_width, svg_height, path_data
     )
+}
+
+fn split_preview_segments(line: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut start = 0_usize;
+    let mut in_whitespace = false;
+
+    for (index, character) in line.char_indices() {
+        if index == 0 {
+            in_whitespace = character.is_whitespace();
+            continue;
+        }
+
+        if character.is_whitespace() == in_whitespace {
+            continue;
+        }
+
+        segments.push(&line[start..index]);
+        start = index;
+        in_whitespace = character.is_whitespace();
+    }
+
+    if start < line.len() {
+        segments.push(&line[start..]);
+    }
+
+    segments
+}
+
+fn preview_segment_width(
+    segment: &str,
+    glyph_map: &HashMap<char, &GeneratedGlyph>,
+    preview_scale: f32,
+) -> i32 {
+    segment.chars().fold(0_i32, |accumulator, character| {
+        let next_width = glyph_map
+            .get(&character)
+            .map_or(220, |glyph| i32::from(glyph.advance_width));
+        accumulator + scale_preview_value(next_width, preview_scale)
+    })
 }
 
 #[allow(clippy::cast_precision_loss)]
