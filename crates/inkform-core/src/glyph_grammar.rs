@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy)]
-pub struct ReferenceStyle {
+pub struct GlyphStyle {
     pub slant: f32,
     pub width_scale: f32,
     pub stroke_width: f32,
@@ -29,9 +29,9 @@ enum Accent {
     Slash,
 }
 
-pub fn build_reference_glyph(
+pub fn build_glyph_from_grammar(
     character: char,
-    style: ReferenceStyle,
+    style: GlyphStyle,
     seed: u64,
 ) -> Option<Vec<Vec<(i16, i16)>>> {
     let (base_character, accents) = decompose_character(character);
@@ -40,7 +40,7 @@ pub fn build_reference_glyph(
 
     for recipe in recipes {
         let thickness = (style.stroke_width * recipe.thickness_scale).max(18.0);
-        let mut rendered = render_recipe(*recipe, style, thickness, seed);
+        let mut rendered = render_recipe(*recipe, style, thickness, seed, 0.0, 0.0);
         contours.append(&mut rendered);
     }
 
@@ -1180,7 +1180,7 @@ const fn recipes_for_character(character: char) -> Option<&'static [StrokeRecipe
 
 fn render_accent(
     accent: Accent,
-    style: ReferenceStyle,
+    style: GlyphStyle,
     base_character: char,
     seed: u64,
 ) -> Vec<Vec<(i16, i16)>> {
@@ -1245,38 +1245,30 @@ fn render_accent(
         },
     };
 
-    let shifted = shift_recipe(recipe, 0.0, top);
     if matches!(accent, Accent::Diaeresis) {
-        let left = shift_recipe(shifted, -55.0, 0.0);
-        let right = shift_recipe(shifted, 75.0, 0.0);
-        let mut contours = render_recipe(left, style, thickness, seed ^ 0x44);
-        contours.extend(render_recipe(right, style, thickness, seed ^ 0x55));
+        let mut contours = render_recipe(recipe, style, thickness, seed ^ 0x44, -55.0, top);
+        contours.extend(render_recipe(
+            recipe,
+            style,
+            thickness,
+            seed ^ 0x55,
+            75.0,
+            top,
+        ));
         return contours;
     }
 
-    render_recipe(shifted, style, thickness, seed ^ 0x77)
-}
-
-fn shift_recipe(recipe: StrokeRecipe, dx: f32, dy: f32) -> StrokeRecipe {
-    let shifted = recipe
-        .points
-        .iter()
-        .map(|(x, y)| (*x + dx, *y + dy))
-        .collect::<Vec<_>>();
-    let leaked = Box::leak(shifted.into_boxed_slice());
-    StrokeRecipe {
-        points: leaked,
-        closed: recipe.closed,
-        thickness_scale: recipe.thickness_scale,
-    }
+    render_recipe(recipe, style, thickness, seed ^ 0x77, 0.0, top)
 }
 
 #[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
 fn render_recipe(
     recipe: StrokeRecipe,
-    style: ReferenceStyle,
+    style: GlyphStyle,
     thickness: f32,
     seed: u64,
+    offset_x: f32,
+    offset_y: f32,
 ) -> Vec<Vec<(i16, i16)>> {
     let styled_points = recipe
         .points
@@ -1286,17 +1278,20 @@ fn render_recipe(
             let channel = u32::try_from(index).unwrap_or(0);
             let jitter_x = noise(seed, channel).mul_add(style.waviness * 0.18, 0.0);
             let jitter_y = noise(seed.rotate_left(7), channel).mul_add(style.waviness * 0.2, 0.0);
-            let height_shift = if *y > style.body_height {
+            let shifted_y = *y + offset_y;
+            let height_shift = if shifted_y > style.body_height {
                 style.ascender_height - 760.0
-            } else if *y < 0.0 {
-                -style.descender_depth - y.abs()
+            } else if shifted_y < 0.0 {
+                -style.descender_depth - shifted_y.abs()
             } else {
                 style.baseline_lift
             };
-            let scaled_x = (*x - 280.0)
-                .mul_add(style.width_scale, style.slant.mul_add(*y / 700.0, 280.0))
-                + jitter_x;
-            let scaled_y = y + height_shift + jitter_y;
+            let shifted_x = *x + offset_x;
+            let scaled_x = (shifted_x - 280.0).mul_add(
+                style.width_scale,
+                style.slant.mul_add(shifted_y / 700.0, 280.0),
+            ) + jitter_x;
+            let scaled_y = shifted_y + height_shift + jitter_y;
             (scaled_x, scaled_y)
         })
         .collect::<Vec<_>>();

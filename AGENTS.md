@@ -30,6 +30,9 @@
 - Favor local browser processing to avoid Vercel Hobby backend limits
 - Keep script coverage data-driven so new script packs can be added later
 - Do not require a guided handwriting sheet in the primary product flow
+- Do not use an embedded reference font in generation
+- Use the uploaded handwriting image to derive style signals; use the in-project glyph grammar to
+  synthesize complete, legible character topology for freeform samples
 
 ## Rust Coding Constraints
 
@@ -90,6 +93,9 @@
 ## Known Risks
 
 - Real handwriting-to-font generation is substantially more complex than the current scaffold
+- A freeform image has no reliable glyph-to-character mapping without OCR, transcription, or a
+  controlled sample; v1 therefore uses image-derived style with a legible glyph grammar rather
+  than claiming literal per-character reconstruction
 - Browser-side processing must be kept performant enough for Vercel Hobby delivery
 - CJK and other large scripts remain a roadmap item, not current functionality
 - Frontend `npm audit` currently reports a moderate transitive `postcss < 8.5.10` issue through `next@16.2.10`; do not use `npm audit fix --force` because the suggested downgrade path is invalid for this project

@@ -1,7 +1,6 @@
-use crate::base_font::base_font_glyph;
 use crate::domain::{GlyphCandidate, SampleImage, ScriptPack};
 use crate::extraction::{ExtractionResult, extract_handwriting};
-use crate::reference_bank::{ReferenceStyle, build_reference_glyph};
+use crate::glyph_grammar::{GlyphStyle, build_glyph_from_grammar};
 use image::{GrayImage, ImageReader, Luma};
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -270,18 +269,13 @@ fn build_glyph_shapes(
             .map_or(*character, |glyph| glyph.character);
         let seed = mix_seed(base_seed, *character);
         let hinted_shape = select_shape_for_glyph(&extracted_shapes, candidate, glyph_index, seed);
-        let reference_style = reference_style(style_profile, hinted_shape);
-        let base_font_glyph = base_font_glyph(candidate)
-            .map(|contours| deform_base_font_contours(candidate, &contours, reference_style, seed));
-        let reference_glyph = build_reference_glyph(candidate, reference_style, seed);
         let advance_width = glyph_advance_width(candidate);
-        let contours = match base_font_glyph {
-            Some(contours) if !contours.is_empty() => contours,
-            _ => match reference_glyph {
-                Some(contours) if !contours.is_empty() => contours,
-                _ => algorithmic_contours(candidate, advance_width, seed, style_profile),
-            },
-        };
+        // The sample defines style. The grammar supplies legible topology for
+        // glyphs that cannot appear in an arbitrary freeform upload.
+        let style = glyph_style(style_profile, hinted_shape);
+        let contours = build_glyph_from_grammar(candidate, style, seed)
+            .filter(|contours| !contours.is_empty())
+            .unwrap_or_else(|| algorithmic_contours(candidate, advance_width, seed, style_profile));
         generated.push(GeneratedGlyph {
             character: candidate,
             advance_width,
@@ -435,147 +429,27 @@ fn derive_style_profile_from_shapes(extracted_shapes: &[ExtractedShape]) -> Opti
     })
 }
 
-fn reference_style(
-    style_profile: StyleProfile,
-    hinted_shape: Option<&ExtractedShape>,
-) -> ReferenceStyle {
-    let hint_width_scale = hinted_shape.map_or(style_profile.width_scale, |shape| {
+fn glyph_style(style_profile: StyleProfile, hinted_shape: Option<&ExtractedShape>) -> GlyphStyle {
+    let width_scale = hinted_shape.map_or(style_profile.width_scale, |shape| {
         clamp_f32(shape.measures.width_ratio.mul_add(0.42, 0.74), 0.74, 1.22)
     });
-    let hint_slant = hinted_shape.map_or(style_profile.slant, |shape| {
+    let slant = hinted_shape.map_or(style_profile.slant, |shape| {
         clamp_f32(shape.measures.slant * 260.0, -90.0, 130.0)
     });
-    let hint_stroke_width = hinted_shape.map_or(style_profile.stroke_width, |shape| {
+    let stroke_width = hinted_shape.map_or(style_profile.stroke_width, |shape| {
         clamp_f32(shape.measures.density.mul_add(92.0, 26.0), 24.0, 104.0)
     });
 
-    ReferenceStyle {
-        slant: (style_profile.slant + hint_slant) * 0.5,
-        width_scale: (style_profile.width_scale + hint_width_scale) * 0.5,
-        stroke_width: (style_profile.stroke_width + hint_stroke_width) * 0.5,
+    GlyphStyle {
+        slant: (style_profile.slant + slant) * 0.5,
+        width_scale: (style_profile.width_scale + width_scale) * 0.5,
+        stroke_width: (style_profile.stroke_width + stroke_width) * 0.5,
         waviness: style_profile.waviness,
         baseline_lift: style_profile.baseline_lift,
         body_height: style_profile.body_height,
         ascender_height: style_profile.ascender_height,
         descender_depth: style_profile.descender_depth,
     }
-}
-
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-fn deform_base_font_contours(
-    character: char,
-    contours: &[Vec<(i16, i16)>],
-    style: ReferenceStyle,
-    seed: u64,
-) -> Vec<Vec<(i16, i16)>> {
-    let glyph_kind = classify_glyph(character);
-    let width_bias = match glyph_kind {
-        GlyphKind::Uppercase => 1.08,
-        GlyphKind::Lowercase => 0.98,
-        GlyphKind::Descender => 1.02,
-        GlyphKind::Digit => 0.94,
-        GlyphKind::Punctuation => 0.72,
-    };
-    let vertical_bias = match glyph_kind {
-        GlyphKind::Uppercase => 1.04,
-        GlyphKind::Lowercase => 0.94,
-        GlyphKind::Descender => 1.08,
-        GlyphKind::Digit => 0.9,
-        GlyphKind::Punctuation => 0.62,
-    };
-    let style_width = style
-        .width_scale
-        .mul_add(width_bias, random_unit(seed, 301) * 0.18);
-    let style_slant = style.slant + random_unit(seed, 302) * 34.0;
-    let bounce = style.baseline_lift + random_unit(seed, 303) * 34.0;
-    let wobble = style.waviness.mul_add(0.85, 12.0);
-    let body_scale =
-        (style.body_height / 520.0).mul_add(vertical_bias, random_unit(seed, 304) * 0.1);
-    let ascender_scale =
-        (style.ascender_height / 760.0).mul_add(vertical_bias, random_unit(seed, 305) * 0.12);
-    let descender_shift = style
-        .descender_depth
-        .mul_add(0.7, random_unit(seed, 306) * 26.0);
-
-    contours
-        .iter()
-        .enumerate()
-        .map(|(contour_index, contour)| {
-            let deformed = contour
-                .iter()
-                .enumerate()
-                .map(|(point_index, (x, y))| {
-                    let center_x = 310.0_f32;
-                    let normalized_x = f32::from(*x) - center_x;
-                    let normalized_y = f32::from(*y);
-                    let channel_base =
-                        u32::try_from(contour_index.saturating_mul(97) + point_index).unwrap_or(0);
-                    let progress_x = normalized_x / 260.0;
-                    let progress_y = normalized_y / 700.0;
-                    let wave_x = progress_y.sin() * wobble * 0.42;
-                    let wave_y = progress_x.sin() * wobble * 0.58;
-                    let jitter_x = random_unit(seed.rotate_left(11), channel_base) * wobble * 0.34;
-                    let jitter_y = random_unit(seed.rotate_left(17), channel_base) * wobble * 0.4;
-                    let vertical_scale = if normalized_y > style.body_height {
-                        ascender_scale
-                    } else {
-                        body_scale
-                    };
-                    let descended_y = if normalized_y < 0.0 {
-                        descender_shift.mul_add(-0.72, normalized_y)
-                    } else {
-                        normalized_y
-                    };
-                    let side_pull = progress_x * progress_x.abs() * 18.0;
-                    let deformed_x = normalized_x.mul_add(
-                        style_width,
-                        style_slant.mul_add(descended_y / 620.0, center_x),
-                    ) + wave_x
-                        + jitter_x
-                        + side_pull;
-                    let deformed_y =
-                        descended_y.mul_add(vertical_scale, bounce) + wave_y + jitter_y;
-                    (
-                        round_to_i16(clamp_f32(deformed_x, 12.0, 608.0)),
-                        round_to_i16(clamp_f32(deformed_y, -240.0, 820.0)),
-                    )
-                })
-                .collect::<Vec<_>>();
-            simplify_contour(&deformed)
-        })
-        .filter(|contour| contour.len() >= 3)
-        .collect::<Vec<_>>()
-}
-
-fn simplify_contour(points: &[(i16, i16)]) -> Vec<(i16, i16)> {
-    if points.len() <= 96 {
-        return dedupe_contour(points);
-    }
-
-    let deduped = dedupe_contour(points);
-    if deduped.len() <= 96 {
-        return deduped;
-    }
-
-    let stride = deduped.len().div_ceil(96);
-    deduped.iter().step_by(stride).copied().collect::<Vec<_>>()
-}
-
-fn dedupe_contour(points: &[(i16, i16)]) -> Vec<(i16, i16)> {
-    let mut deduped = Vec::with_capacity(points.len());
-
-    for point in points {
-        if deduped.last().copied() == Some(*point) {
-            continue;
-        }
-        deduped.push(*point);
-    }
-
-    if deduped.len() >= 2 && deduped.first().copied() == deduped.last().copied() {
-        let _ = deduped.pop();
-    }
-
-    deduped
 }
 
 fn extract_shape_library(sheet: &GrayImage) -> Vec<ExtractedShape> {
@@ -744,7 +618,6 @@ fn embedding_distance(left: StyleEmbedding, right: StyleEmbedding) -> f32 {
 }
 
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-#[allow(dead_code)]
 fn remix_shape_outline(
     shape: &ExtractedShape,
     character: char,
@@ -2082,5 +1955,73 @@ fn clamp_i32_to_i16(value: i32) -> i16 {
         i16::MIN
     } else {
         i16::try_from(value).map_or(0, |value| value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ComponentMeasures, ExtractedShape, build_glyph_shapes, derive_style_profile, glyph_style,
+        mix_seed,
+    };
+    use crate::domain::{GlyphCandidate, ScriptPack};
+    use crate::extraction::{ExtractedGlyph, ExtractionResult};
+    use crate::glyph_grammar::build_glyph_from_grammar;
+
+    #[test]
+    fn glyph_grammar_uses_style_derived_from_extracted_handwriting() {
+        let outline = vec![
+            (48, 38),
+            (120, 710),
+            (230, 690),
+            (318, 410),
+            (404, 720),
+            (548, 54),
+            (500, 24),
+            (390, 340),
+            (302, 28),
+            (214, 610),
+            (134, 32),
+            (72, 18),
+        ];
+        let measures = ComponentMeasures {
+            width_ratio: 0.74,
+            height_ratio: 1.35,
+            slant: 0.08,
+            density: 0.31,
+            baseline_offset: 0.1,
+            ink_area: 0.031,
+        };
+        let extraction = ExtractionResult {
+            glyphs: vec![ExtractedGlyph {
+                outline: outline.clone(),
+                width_ratio: measures.width_ratio,
+                height_ratio: measures.height_ratio,
+                slant: measures.slant,
+                density: measures.density,
+                baseline_offset: measures.baseline_offset,
+                ink_area: measures.ink_area,
+            }],
+        };
+        let script_pack = ScriptPack {
+            id: String::from("test"),
+            display_name: String::from("Test"),
+            glyphs: vec!['a'],
+        };
+        let candidates = vec![GlyphCandidate {
+            character: 'a',
+            confidence_percent: 100,
+        }];
+        let expected_shape = ExtractedShape { measures, outline };
+        let profile = derive_style_profile(None, std::slice::from_ref(&expected_shape));
+        let seed = mix_seed(91, 'a');
+        let expected =
+            build_glyph_from_grammar('a', glyph_style(profile, Some(&expected_shape)), seed);
+
+        let generated = build_glyph_shapes(91, &script_pack, &candidates, None, Some(&extraction));
+
+        assert_eq!(generated.len(), 1);
+        let expected = expected.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(generated[0].contours, expected);
     }
 }

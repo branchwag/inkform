@@ -1,6 +1,9 @@
 use crate::domain::SampleImage;
 use image::{GrayImage, ImageReader, Luma};
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
+
+const MAX_BOUNDARY_POINTS: usize = 96;
 
 #[derive(Debug, Clone)]
 pub struct ExtractedGlyph {
@@ -21,40 +24,25 @@ pub struct ExtractionResult {
 pub fn extract_handwriting(sample_image: &SampleImage) -> Option<ExtractionResult> {
     let image = decode_image(sample_image)?;
     let ink_threshold = estimate_ink_threshold(&image);
-    let crop = ink_bounds(&image, ink_threshold)?;
-    let line_spans = segment_lines(&image, crop, ink_threshold);
-    if line_spans.is_empty() {
-        return None;
-    }
+    let components = extract_ink_components(&image, ink_threshold)?;
 
     let mut glyphs = Vec::new();
-    for (row_start, row_end) in line_spans {
-        let spans = segment_line_spans(&image, crop, row_start, row_end, ink_threshold);
-        for (column_start, column_end) in spans {
-            let points = collect_ink_points(
-                &image,
-                column_start,
-                column_end,
-                row_start,
-                row_end,
-                ink_threshold,
-            )?;
-            if points.len() < 24 {
-                continue;
-            }
-
-            let outline = normalize_outline_to_font(&sample_component_outline(&points)?)?;
-            let measures = measure_component(&points)?;
-            glyphs.push(ExtractedGlyph {
-                outline,
-                width_ratio: measures.width_ratio,
-                height_ratio: measures.height_ratio,
-                slant: measures.slant,
-                density: measures.density,
-                baseline_offset: measures.baseline_offset,
-                ink_area: measures.ink_area,
-            });
+    for points in components {
+        if !is_handwriting_component(&points) {
+            continue;
         }
+
+        let outline = normalize_outline_to_font(&trace_component_boundary(&points)?)?;
+        let measures = measure_component(&points)?;
+        glyphs.push(ExtractedGlyph {
+            outline,
+            width_ratio: measures.width_ratio,
+            height_ratio: measures.height_ratio,
+            slant: measures.slant,
+            density: measures.density,
+            baseline_offset: measures.baseline_offset,
+            ink_area: measures.ink_area,
+        });
     }
 
     if glyphs.is_empty() {
@@ -71,6 +59,109 @@ fn decode_image(sample_image: &SampleImage) -> Option<GrayImage> {
     Some(image.to_luma8())
 }
 
+fn extract_ink_components(
+    image: &GrayImage,
+    ink_threshold: u8,
+) -> Option<Vec<Vec<(usize, usize)>>> {
+    let width = usize::try_from(image.width()).ok()?;
+    let height = usize::try_from(image.height()).ok()?;
+    let mut visited = vec![false; width.checked_mul(height)?];
+    let mut components = Vec::new();
+
+    for y in 0..height {
+        for x in 0..width {
+            let index = y.checked_mul(width)?.checked_add(x)?;
+            if visited.get(index).copied().unwrap_or(true)
+                || !is_ink(
+                    *image.get_pixel(u32::try_from(x).ok()?, u32::try_from(y).ok()?),
+                    ink_threshold,
+                )
+            {
+                continue;
+            }
+
+            let component = flood_fill_component(image, ink_threshold, x, y, &mut visited)?;
+            if component.len() >= 24 {
+                components.push(component);
+            }
+        }
+    }
+
+    components.sort_by_key(|points| {
+        let min_y = points.iter().map(|(_, y)| *y).min().unwrap_or(0);
+        let min_x = points.iter().map(|(x, _)| *x).min().unwrap_or(0);
+        (min_y, min_x)
+    });
+    Some(components)
+}
+
+fn flood_fill_component(
+    image: &GrayImage,
+    ink_threshold: u8,
+    start_x: usize,
+    start_y: usize,
+    visited: &mut [bool],
+) -> Option<Vec<(usize, usize)>> {
+    let width = usize::try_from(image.width()).ok()?;
+    let height = usize::try_from(image.height()).ok()?;
+    let mut queue = std::collections::VecDeque::from([(start_x, start_y)]);
+    let mut points = Vec::new();
+
+    while let Some((x, y)) = queue.pop_front() {
+        let index = y.checked_mul(width)?.checked_add(x)?;
+        if visited.get(index).copied().unwrap_or(true) {
+            continue;
+        }
+        visited[index] = true;
+        if !is_ink(
+            *image.get_pixel(u32::try_from(x).ok()?, u32::try_from(y).ok()?),
+            ink_threshold,
+        ) {
+            continue;
+        }
+
+        points.push((x, y));
+        for next_y in y.saturating_sub(1)..=(y + 1).min(height.saturating_sub(1)) {
+            for next_x in x.saturating_sub(1)..=(x + 1).min(width.saturating_sub(1)) {
+                let next_index = next_y.checked_mul(width)?.checked_add(next_x)?;
+                if !visited.get(next_index).copied().unwrap_or(true) {
+                    queue.push_back((next_x, next_y));
+                }
+            }
+        }
+    }
+
+    Some(points)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn is_handwriting_component(points: &[(usize, usize)]) -> bool {
+    let Some(min_x) = points.iter().map(|(x, _)| *x).min() else {
+        return false;
+    };
+    let Some(max_x) = points.iter().map(|(x, _)| *x).max() else {
+        return false;
+    };
+    let Some(min_y) = points.iter().map(|(_, y)| *y).min() else {
+        return false;
+    };
+    let Some(max_y) = points.iter().map(|(_, y)| *y).max() else {
+        return false;
+    };
+
+    let width = max_x.saturating_sub(min_x) + 1;
+    let height = max_y.saturating_sub(min_y) + 1;
+    let area = width.saturating_mul(height);
+    let density = if area == 0 {
+        1.0
+    } else {
+        points.len() as f32 / area as f32
+    };
+
+    let looks_like_dense_dot = width < 30 && height < 30 && density > 0.42;
+    width >= 14 && height >= 14 && !looks_like_dense_dot
+}
+
 fn estimate_ink_threshold(image: &GrayImage) -> u8 {
     let mut total = 0_u64;
     let mut count = 0_u64;
@@ -85,223 +176,6 @@ fn estimate_ink_threshold(image: &GrayImage) -> u8 {
 
     let average = u8::try_from(total / count).unwrap_or(210);
     average.saturating_sub(28).clamp(96, 216)
-}
-
-fn ink_bounds(image: &GrayImage, ink_threshold: u8) -> Option<(usize, usize, usize, usize)> {
-    let width = usize::try_from(image.width()).ok()?;
-    let height = usize::try_from(image.height()).ok()?;
-    let mut min_x = width;
-    let mut max_x = 0_usize;
-    let mut min_y = height;
-    let mut max_y = 0_usize;
-    let mut found = false;
-
-    for y in 0..height {
-        for x in 0..width {
-            if !is_ink(
-                *image.get_pixel(u32::try_from(x).ok()?, u32::try_from(y).ok()?),
-                ink_threshold,
-            ) {
-                continue;
-            }
-
-            min_x = min_x.min(x);
-            max_x = max_x.max(x);
-            min_y = min_y.min(y);
-            max_y = max_y.max(y);
-            found = true;
-        }
-    }
-
-    if !found {
-        return None;
-    }
-
-    Some((
-        min_x.saturating_sub(6),
-        (max_x + 6).min(width.saturating_sub(1)),
-        min_y.saturating_sub(6),
-        (max_y + 6).min(height.saturating_sub(1)),
-    ))
-}
-
-fn segment_lines(
-    image: &GrayImage,
-    crop: (usize, usize, usize, usize),
-    ink_threshold: u8,
-) -> Vec<(usize, usize)> {
-    let (min_x, max_x, min_y, max_y) = crop;
-    let width = max_x.saturating_sub(min_x) + 1;
-    let min_row_ink = (width / 80).max(2);
-    let mut spans = Vec::new();
-    let mut active_start: Option<usize> = None;
-
-    for y in min_y..=max_y {
-        let mut row_ink = 0_usize;
-        for x in min_x..=max_x {
-            let pixel =
-                image.get_pixel(u32::try_from(x).unwrap_or(0), u32::try_from(y).unwrap_or(0));
-            if is_ink(*pixel, ink_threshold) {
-                row_ink = row_ink.saturating_add(1);
-            }
-        }
-
-        if row_ink >= min_row_ink {
-            if active_start.is_none() {
-                active_start = Some(y);
-            }
-            continue;
-        }
-
-        if let Some(start) = active_start.take()
-            && y.saturating_sub(start) >= 8
-        {
-            spans.push((start.saturating_sub(4), y.min(max_y)));
-        }
-    }
-
-    if let Some(start) = active_start {
-        spans.push((start.saturating_sub(4), max_y));
-    }
-
-    spans
-}
-
-fn segment_line_spans(
-    image: &GrayImage,
-    crop: (usize, usize, usize, usize),
-    row_start: usize,
-    row_end: usize,
-    ink_threshold: u8,
-) -> Vec<(usize, usize)> {
-    let (min_x, max_x, _, _) = crop;
-    let band_height = row_end.saturating_sub(row_start).max(1);
-    let mut projection = Vec::new();
-
-    for x in min_x..=max_x {
-        let mut column_ink = 0_usize;
-        for y in row_start..=row_end {
-            let pixel =
-                image.get_pixel(u32::try_from(x).unwrap_or(0), u32::try_from(y).unwrap_or(0));
-            if is_ink(*pixel, ink_threshold) {
-                column_ink = column_ink.saturating_add(1);
-            }
-        }
-        projection.push(column_ink);
-    }
-
-    let mut spans = Vec::new();
-    let mut active_start: Option<usize> = None;
-    for (offset, ink_count) in projection.iter().enumerate() {
-        if *ink_count > 0 {
-            if active_start.is_none() {
-                active_start = Some(offset);
-            }
-            continue;
-        }
-
-        if let Some(start) = active_start.take() {
-            let end = offset.saturating_sub(1);
-            spans.extend(split_span_by_valleys(
-                &projection,
-                min_x,
-                start,
-                end,
-                band_height,
-            ));
-        }
-    }
-
-    if let Some(start) = active_start {
-        spans.extend(split_span_by_valleys(
-            &projection,
-            min_x,
-            start,
-            projection.len().saturating_sub(1),
-            band_height,
-        ));
-    }
-
-    spans
-}
-
-fn split_span_by_valleys(
-    projection: &[usize],
-    min_x: usize,
-    start_offset: usize,
-    end_offset: usize,
-    band_height: usize,
-) -> Vec<(usize, usize)> {
-    let span_width = end_offset.saturating_sub(start_offset) + 1;
-    let estimated_glyphs = (span_width / band_height.max(1)).clamp(1, 6);
-    if estimated_glyphs <= 1 || span_width < band_height.saturating_mul(2) {
-        return vec![(min_x + start_offset, min_x + end_offset)];
-    }
-
-    let mut cuts = Vec::new();
-    for split_index in 1..estimated_glyphs {
-        let anchor = start_offset + ((span_width * split_index) / estimated_glyphs);
-        let window_start = anchor.saturating_sub((band_height / 4).max(2));
-        let window_end = (anchor + (band_height / 4).max(2)).min(end_offset);
-
-        let mut best_offset = anchor;
-        let mut best_value = usize::MAX;
-        for offset in window_start..=window_end {
-            let value = projection.get(offset).copied().unwrap_or(0);
-            if value < best_value {
-                best_value = value;
-                best_offset = offset;
-            }
-        }
-
-        if best_offset > start_offset && best_offset < end_offset {
-            cuts.push(best_offset);
-        }
-    }
-
-    if cuts.is_empty() {
-        return vec![(min_x + start_offset, min_x + end_offset)];
-    }
-
-    let mut spans = Vec::new();
-    let mut current_start = start_offset;
-    for cut in cuts {
-        if cut <= current_start {
-            continue;
-        }
-        spans.push((min_x + current_start, min_x + cut));
-        current_start = cut.saturating_add(1);
-    }
-    if current_start <= end_offset {
-        spans.push((min_x + current_start, min_x + end_offset));
-    }
-
-    spans
-}
-
-fn collect_ink_points(
-    image: &GrayImage,
-    start_x: usize,
-    end_x: usize,
-    start_y: usize,
-    end_y: usize,
-    ink_threshold: u8,
-) -> Option<Vec<(usize, usize)>> {
-    let mut points = Vec::new();
-    for y in start_y..=end_y {
-        for x in start_x..=end_x {
-            let pixel = image.get_pixel(u32::try_from(x).ok()?, u32::try_from(y).ok()?);
-            if is_ink(*pixel, ink_threshold) {
-                points.push((x, y));
-            }
-        }
-    }
-
-    if points.len() < 24 {
-        return None;
-    }
-
-    Some(points)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -372,54 +246,104 @@ const fn is_ink(pixel: Luma<u8>, ink_threshold: u8) -> bool {
     pixel.0[0] <= ink_threshold
 }
 
-fn sample_component_outline(points: &[(usize, usize)]) -> Option<Vec<(usize, usize)>> {
-    let min_x = points.iter().map(|(x, _)| *x).min()?;
-    let max_x = points.iter().map(|(x, _)| *x).max()?;
-    let min_y = points.iter().map(|(_, y)| *y).min()?;
-    let max_y = points.iter().map(|(_, y)| *y).max()?;
-    if max_x <= min_x || max_y <= min_y {
+fn trace_component_boundary(points: &[(usize, usize)]) -> Option<Vec<(usize, usize)>> {
+    type Point = (usize, usize);
+
+    let ink = points.iter().copied().collect::<HashSet<_>>();
+    if ink.is_empty() {
         return None;
     }
 
-    let sample_columns = 24_usize;
-    let width_span = (max_x - min_x + 1).max(sample_columns);
-    let mut top_points = Vec::new();
-    let mut bottom_points = Vec::new();
+    let mut edges = Vec::new();
+    for &(x, y) in &ink {
+        if !ink.contains(&(x, y.saturating_sub(1))) {
+            edges.push(((x, y), (x.saturating_add(1), y)));
+        }
+        if !ink.contains(&(x.saturating_add(1), y)) {
+            edges.push((
+                (x.saturating_add(1), y),
+                (x.saturating_add(1), y.saturating_add(1)),
+            ));
+        }
+        if !ink.contains(&(x, y.saturating_add(1))) {
+            edges.push((
+                (x.saturating_add(1), y.saturating_add(1)),
+                (x, y.saturating_add(1)),
+            ));
+        }
+        if !ink.contains(&(x.saturating_sub(1), y)) {
+            edges.push(((x, y.saturating_add(1)), (x, y)));
+        }
+    }
 
-    for sample_index in 0..sample_columns {
-        let local_x = min_x + ((sample_index * width_span) / sample_columns).min(width_span - 1);
-        let column_range_end = (local_x + (width_span / sample_columns).max(1)).min(max_x + 1);
+    let mut outgoing: HashMap<Point, Vec<usize>> = HashMap::new();
+    for (index, (start, _)) in edges.iter().enumerate() {
+        outgoing.entry(*start).or_default().push(index);
+    }
 
-        let mut top_hit: Option<usize> = None;
-        let mut bottom_hit: Option<usize> = None;
+    let mut used = vec![false; edges.len()];
+    let mut largest_loop = Vec::new();
+    for edge_index in 0..edges.len() {
+        if used.get(edge_index).copied().unwrap_or(true) {
+            continue;
+        }
 
-        for x in local_x..column_range_end {
-            for &(point_x, point_y) in points {
-                if point_x != x {
-                    continue;
-                }
+        let start = edges.get(edge_index)?.0;
+        let mut current = start;
+        let mut loop_points = Vec::new();
+        loop {
+            let candidates = outgoing.get(&current)?;
+            let next_edge = candidates
+                .iter()
+                .copied()
+                .find(|candidate| !used.get(*candidate).copied().unwrap_or(true));
+            let Some(next_edge) = next_edge else {
+                break;
+            };
 
-                top_hit = Some(top_hit.map_or(point_y, |current| current.min(point_y)));
-                bottom_hit = Some(bottom_hit.map_or(point_y, |current| current.max(point_y)));
+            used[next_edge] = true;
+            loop_points.push(current);
+            current = edges.get(next_edge)?.1;
+            if current == start {
+                break;
             }
         }
 
-        let Some(top_y) = top_hit else {
-            continue;
-        };
-        let bottom_y = bottom_hit.unwrap_or(top_y);
-
-        top_points.push((local_x, top_y));
-        bottom_points.push((local_x, bottom_y));
+        if loop_points.len() > largest_loop.len() {
+            largest_loop = loop_points;
+        }
     }
 
-    if top_points.len() < 4 {
+    simplify_outline(&largest_loop)
+}
+
+fn simplify_outline(points: &[(usize, usize)]) -> Option<Vec<(usize, usize)>> {
+    let mut deduplicated = Vec::with_capacity(points.len());
+    for point in points {
+        if deduplicated.last().copied() != Some(*point) {
+            deduplicated.push(*point);
+        }
+    }
+
+    if deduplicated.len() < 4 {
         return None;
     }
 
-    bottom_points.reverse();
-    top_points.extend(bottom_points);
-    Some(top_points)
+    if deduplicated.len() <= MAX_BOUNDARY_POINTS {
+        return Some(deduplicated);
+    }
+
+    let stride = deduplicated.len().div_ceil(MAX_BOUNDARY_POINTS);
+    let simplified = deduplicated
+        .iter()
+        .step_by(stride)
+        .copied()
+        .collect::<Vec<_>>();
+    if simplified.len() < 4 {
+        return None;
+    }
+
+    Some(simplified)
 }
 
 #[allow(
