@@ -604,27 +604,25 @@ const fn recipes_for_character(character: char) -> Option<&'static [StrokeRecipe
             },
         ]),
         'e' => Some(&[
-            // The sample's `e` is a compact, low loop instead of a full-height
-            // circular bowl.
             StrokeRecipe {
                 points: &[
-                    (350.0, 175.0),
-                    (260.0, 105.0),
-                    (180.0, 135.0),
-                    (150.0, 205.0),
-                    (185.0, 275.0),
-                    (280.0, 290.0),
-                    (355.0, 230.0),
-                    (365.0, 190.0),
-                    (405.0, 230.0),
+                    (385.0, 270.0),
+                    (325.0, 320.0),
+                    (225.0, 325.0),
+                    (155.0, 275.0),
+                    (135.0, 195.0),
+                    (165.0, 130.0),
+                    (245.0, 105.0),
+                    (330.0, 135.0),
+                    (365.0, 185.0),
                 ],
                 closed: false,
                 thickness_scale: 0.76,
             },
             StrokeRecipe {
-                points: &[(150.0, 205.0), (300.0, 205.0)],
+                points: &[(145.0, 205.0), (290.0, 205.0), (410.0, 180.0)],
                 closed: false,
-                thickness_scale: 0.66,
+                thickness_scale: 0.64,
             },
         ]),
         'f' => Some(&[
@@ -1293,24 +1291,30 @@ const fn looped_recipes_for_character(character: char) -> Option<&'static [Strok
                 thickness_scale: 0.78,
             },
         ]),
-        'e' => Some(&[StrokeRecipe {
-            // A compact, continuous loop is more legible for cursive samples
-            // than the print-style cross stroke used by the fallback recipe.
-            points: &[
-                (355.0, 225.0),
-                (280.0, 325.0),
-                (180.0, 310.0),
-                (140.0, 220.0),
-                (180.0, 120.0),
-                (280.0, 105.0),
-                (355.0, 165.0),
-                (330.0, 235.0),
-                (215.0, 235.0),
-                (400.0, 190.0),
-            ],
-            closed: false,
-            thickness_scale: 0.74,
-        }]),
+        'e' => Some(&[
+            StrokeRecipe {
+                // An open bowl plus crossbar remains recognizable after the
+                // stronger smoothing applied to cursive samples.
+                points: &[
+                    (390.0, 285.0),
+                    (325.0, 335.0),
+                    (215.0, 325.0),
+                    (142.0, 265.0),
+                    (130.0, 185.0),
+                    (170.0, 115.0),
+                    (265.0, 98.0),
+                    (345.0, 135.0),
+                    (375.0, 190.0),
+                ],
+                closed: false,
+                thickness_scale: 0.74,
+            },
+            StrokeRecipe {
+                points: &[(142.0, 205.0), (295.0, 210.0), (425.0, 180.0)],
+                closed: false,
+                thickness_scale: 0.62,
+            },
+        ]),
         'f' => Some(&[StrokeRecipe {
             points: &[
                 (75.0, 35.0),
@@ -1845,7 +1849,7 @@ mod tests {
     }
 
     #[test]
-    fn cursive_h_preserves_an_entry_swash_and_e_stays_a_single_loop() {
+    fn cursive_h_preserves_an_entry_swash_and_e_keeps_a_distinct_crossbar() {
         let Some(h_contours) = build_glyph_from_grammar('H', CURSIVE_STYLE, 7) else {
             panic!("missing grammar for capital H");
         };
@@ -1854,6 +1858,6 @@ mod tests {
         };
 
         assert_eq!(h_contours.len(), 2);
-        assert_eq!(e_contours.len(), 1);
+        assert_eq!(e_contours.len(), 2);
     }
 }

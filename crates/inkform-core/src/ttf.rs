@@ -1956,8 +1956,8 @@ fn build_head_table(metrics: FontMetrics, loca_format: i16) -> Vec<u8> {
 fn build_hhea_table(metrics: FontMetrics, glyph_count: usize) -> Vec<u8> {
     let mut table = Vec::new();
     push_u32(&mut table, 0x0001_0000);
-    push_i16(&mut table, ASCENDER);
-    push_i16(&mut table, DESCENDER);
+    push_i16(&mut table, vertical_ascender(metrics));
+    push_i16(&mut table, vertical_descender(metrics));
     push_i16(&mut table, LINE_GAP);
     push_u16(&mut table, metrics.advance_width_max);
     push_i16(&mut table, metrics.min_left_side_bearing);
@@ -2129,13 +2129,14 @@ fn build_cmap_table(script_pack: &ScriptPack) -> Vec<u8> {
 fn build_name_table(family_name: &str) -> Vec<u8> {
     let unique_identifier = format!("Inkform:{family_name}:Regular:1.0");
     let full_name = format!("{family_name} Regular");
+    let postscript_name = format!("{family_name}-Regular");
     let records = [
         (1_u16, family_name),
         (2_u16, "Regular"),
         (3_u16, unique_identifier.as_str()),
         (4_u16, full_name.as_str()),
         (5_u16, "Version 1.0"),
-        (6_u16, "InkformPreview-Regular"),
+        (6_u16, postscript_name.as_str()),
     ];
 
     let mut storage = Vec::new();
@@ -2210,12 +2211,22 @@ fn build_os2_table(metrics: FontMetrics, script_pack: &ScriptPack) -> Vec<u8> {
     let (first_character, last_character) = windows_character_range(script_pack);
     push_u16(&mut table, first_character);
     push_u16(&mut table, last_character);
-    push_i16(&mut table, ASCENDER);
-    push_i16(&mut table, DESCENDER);
+    let ascender = vertical_ascender(metrics);
+    let descender = vertical_descender(metrics);
+    push_i16(&mut table, ascender);
+    push_i16(&mut table, descender);
     push_i16(&mut table, LINE_GAP);
-    push_u16(&mut table, u16::try_from(ASCENDER).unwrap_or(0));
-    push_u16(&mut table, u16::try_from(-DESCENDER).unwrap_or(0));
+    push_u16(&mut table, ascender.unsigned_abs());
+    push_u16(&mut table, descender.unsigned_abs());
     table
+}
+
+fn vertical_ascender(metrics: FontMetrics) -> i16 {
+    metrics.y_max.max(ASCENDER)
+}
+
+fn vertical_descender(metrics: FontMetrics) -> i16 {
+    metrics.y_min.min(DESCENDER)
 }
 
 fn windows_character_range(script_pack: &ScriptPack) -> (u16, u16) {
@@ -2537,6 +2548,24 @@ mod tests {
             super::windows_character_range(&script_pack),
             (0x0041, 0x20AC)
         );
+    }
+
+    #[test]
+    fn vertical_metrics_enclose_generated_descenders() {
+        let metrics = super::FontMetrics {
+            advance_width_max: 600,
+            min_left_side_bearing: 0,
+            min_right_side_bearing: 0,
+            x_max_extent: 600,
+            x_min: 0,
+            y_min: -820,
+            x_max: 600,
+            y_max: 900,
+            x_avg_char_width: 600,
+        };
+
+        assert_eq!(super::vertical_ascender(metrics), 900);
+        assert_eq!(super::vertical_descender(metrics), -820);
     }
 
     #[test]

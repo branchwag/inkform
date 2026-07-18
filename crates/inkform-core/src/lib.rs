@@ -87,7 +87,38 @@ mod tests {
 
         assert_eq!(artifact.script_pack_id, "latin-extended");
         assert!(artifact.glyphs.len() >= 32);
+        assert!(artifact.family_name.starts_with("Inkform-"));
         assert_eq!(&artifact.binary[0..4], &[0x00, 0x01, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn gives_distinct_samples_distinct_font_families() {
+        let first_sample = SampleImage {
+            width: 1600,
+            height: 2200,
+            bytes: vec![2; 1600],
+            quality: SampleQuality::Clean,
+        };
+        let second_sample = SampleImage {
+            width: 1600,
+            height: 2200,
+            bytes: vec![3; 1600],
+            quality: SampleQuality::Clean,
+        };
+        let script_pack = ScriptPack::latin_extended();
+        let first_artifact = generate_font(&first_sample, &script_pack);
+        let second_artifact = generate_font(&second_sample, &script_pack);
+
+        let first_artifact = match first_artifact {
+            Ok(artifact) => artifact,
+            Err(error) => panic!("first font generation failed: {error}"),
+        };
+        let second_artifact = match second_artifact {
+            Ok(artifact) => artifact,
+            Err(error) => panic!("second font generation failed: {error}"),
+        };
+
+        assert_ne!(first_artifact.family_name, second_artifact.family_name);
     }
 
     #[test]

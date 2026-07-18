@@ -54,25 +54,43 @@ pub fn generate_font_with_transcript(
                 .filter(|glyph| glyph.character.is_some())
                 .count()
         });
+    let family_name = format!("Inkform-{:08X}", sample_identity(sample_image));
 
     let binary = match transcript {
         Some(transcript) if !transcript.trim().is_empty() => build_ttf_with_transcript(
-            "Inkform Preview",
+            &family_name,
             sample_image,
             script_pack,
             &glyphs,
             Some(transcript),
         ),
-        _ => build_ttf("Inkform Preview", sample_image, script_pack, &glyphs),
+        _ => build_ttf(&family_name, sample_image, script_pack, &glyphs),
     };
 
     Ok(FontArtifact {
-        family_name: String::from("Inkform Preview"),
+        family_name,
         script_pack_id: script_pack.id.clone(),
         glyphs,
         anchor_count,
         binary,
     })
+}
+
+fn sample_identity(sample_image: &SampleImage) -> u32 {
+    let mut hash = 0x811C_9DC5_u32;
+
+    for byte in sample_image
+        .width
+        .to_be_bytes()
+        .into_iter()
+        .chain(sample_image.height.to_be_bytes())
+        .chain(sample_image.bytes.iter().copied())
+    {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+
+    hash
 }
 
 fn confidence_for(character: char, sample_size: usize) -> u8 {
