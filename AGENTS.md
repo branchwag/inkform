@@ -39,6 +39,9 @@
   single line, Inkform isolates terminal punctuation, partitions the word at low-ink valleys using
   transcript-derived character-width targets, and accepts anchors only when every extracted region
   passes shape validation. It must fall back to style synthesis when those checks fail
+- The global style profile must use complete source strokes, while transcript slices are only used
+  as character anchors. The grammar applies measured thinness, smoothness, and cursive shear to
+  unseen glyphs; do not reuse one handwritten contour for unrelated characters
 - A real `Hello!` sample can produce overlapping connected-stroke regions plus separate
   punctuation strokes. Preserve the transcript-aligned segmentation confidence checks; never map
   raw components monotonically to characters

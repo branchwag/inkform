@@ -1288,12 +1288,16 @@ fn render_recipe(
                 style.baseline_lift
             };
             let shifted_x = *x + offset_x;
-            let cursive_slant = style.cursive_score * 72.0;
+            // Cursive samples need a stronger shared shear than the default
+            // handwritten grammar. A small baseline rise keeps the strokes
+            // moving forward without inventing disconnected connectors.
+            let cursive_slant = style.cursive_score * 136.0;
+            let baseline_flow = (shifted_x - 280.0) * style.cursive_score * 0.045;
             let scaled_x = (shifted_x - 280.0).mul_add(
                 style.width_scale,
                 (style.slant + cursive_slant).mul_add(shifted_y / 700.0, 280.0),
             ) + jitter_x;
-            let scaled_y = shifted_y + height_shift + jitter_y;
+            let scaled_y = shifted_y + height_shift + baseline_flow + jitter_y;
             (scaled_x, scaled_y)
         })
         .collect::<Vec<_>>();
