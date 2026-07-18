@@ -42,6 +42,13 @@
   --template-guide: #745746;
 }
 
+@font-face {
+  font-family: "Inkform Sample";
+  src: url("/fonts/inkform-sample.woff2?v=4") format("woff2"),
+    url("/fonts/inkform-sample.ttf?v=4") format("truetype");
+  font-display: swap;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -58,6 +65,23 @@ body {
     linear-gradient(180deg, var(--page-start) 0%, var(--page-end) 100%);
   color: var(--foreground);
   font-family: Georgia, "Times New Roman", serif;
+}
+
+.inkform-masthead {
+  margin: 0;
+  color: var(--accent-deep);
+  font-family: "Inkform Sample", Georgia, "Times New Roman", serif;
+  font-size: clamp(4.5rem, 15vw, 10rem);
+  font-weight: 400;
+  line-height: 0.78;
+  letter-spacing: 0.015em;
+  text-wrap: balance;
+}
+
+.hero-heading {
+  margin: 1.65rem 0 1rem;
+  font-size: clamp(2.25rem, 5vw, 4.25rem);
+  line-height: 0.98;
 }
 
 a {
@@ -127,5 +151,9 @@ textarea::placeholder {
   .theme-toggle {
     top: 0.7rem;
     right: 0.7rem;
+  }
+
+  .inkform-masthead {
+    font-size: clamp(4rem, 23vw, 6rem);
   }
 }

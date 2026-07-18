@@ -44,6 +44,9 @@ fn main() -> Result<(), String> {
         String::from("usage: cargo run -p inkform-core --example inspect_sample -- <image-path>")
     })?;
     let transcript = arguments.next();
+    let preview_text = arguments
+        .next()
+        .unwrap_or_else(|| String::from("Hello! The quick brown fox jumps over the lazy dog."));
 
     let bytes = fs::read(&image_path)
         .map_err(|error| format!("could not read sample image '{image_path}': {error}"))?;
@@ -72,7 +75,7 @@ fn main() -> Result<(), String> {
         &sample,
         &script_pack,
         &artifact.glyphs,
-        "Hello! The quick brown fox jumps over the lazy dog.",
+        &preview_text,
         transcript.as_deref(),
     );
     fs::write(&preview_path, preview)

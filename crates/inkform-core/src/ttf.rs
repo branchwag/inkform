@@ -1763,6 +1763,7 @@ fn build_maxp_table(glyphs: &[GlyphDefinition]) -> Vec<u8> {
     push_u16(&mut table, 0);
     push_u16(&mut table, 0);
     push_u16(&mut table, 0);
+    push_u16(&mut table, 0);
     table
 }
 
@@ -1843,7 +1844,7 @@ fn build_cmap_table(script_pack: &ScriptPack) -> Vec<u8> {
 
     let seg_count = u16::try_from(sorted_pairs.len() + 1).unwrap_or(u16::MAX);
     let seg_count_x2 = seg_count.saturating_mul(2);
-    let search_params = search_params(seg_count);
+    let search_params = format4_search_params(seg_count);
     let format4_length = 16_u16.saturating_add(seg_count.saturating_mul(8));
 
     let mut subtable = Vec::new();
@@ -2057,6 +2058,25 @@ fn search_params(item_count: u16) -> SearchParams {
     }
 }
 
+fn format4_search_params(segment_count: u16) -> SearchParams {
+    let mut power = 1_u16;
+    let mut selector = 0_u16;
+
+    while power.saturating_mul(2) <= segment_count.max(1) {
+        power = power.saturating_mul(2);
+        selector = selector.saturating_add(1);
+    }
+
+    let search_range = power.saturating_mul(2);
+    let range_shift = segment_count.saturating_mul(2).saturating_sub(search_range);
+
+    SearchParams {
+        search_range,
+        entry_selector: selector,
+        range_shift,
+    }
+}
+
 fn table_checksum(data: &[u8]) -> u32 {
     let padded_length = align_to(data.len(), 4);
     let mut checksum = 0_u32;
@@ -2131,8 +2151,9 @@ fn clamp_i32_to_i16(value: i32) -> i16 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ComponentMeasures, ExtractedShape, build_glyph_shapes, derive_style_profile, mix_seed,
-        remix_shape_outline,
+        ComponentMeasures, ExtractedShape, build_glyph_shapes, build_maxp_table,
+        build_ttf_from_definitions, derive_style_profile, format4_search_params, mix_seed,
+        notdef_glyph, remix_shape_outline, table_checksum,
     };
     use crate::domain::{GlyphCandidate, ScriptPack};
     use crate::extraction::{ExtractedGlyph, ExtractionResult};
@@ -2214,5 +2235,51 @@ mod tests {
                 .first()
                 .is_some_and(|contour| contour.len() > centerline_length)
         );
+    }
+
+    #[test]
+    fn writes_a_complete_maxp_version_one_table() {
+        let table = build_maxp_table(&[]);
+
+        assert_eq!(table.len(), 32);
+    }
+
+    #[test]
+    fn writes_a_version_zero_os2_table_with_the_required_length() {
+        let table = super::build_os2_table(super::FontMetrics {
+            advance_width_max: 600,
+            min_left_side_bearing: 0,
+            min_right_side_bearing: 0,
+            x_max_extent: 600,
+            x_min: 0,
+            y_min: 0,
+            x_max: 600,
+            y_max: 700,
+            x_avg_char_width: 600,
+        });
+
+        assert_eq!(table.len(), 78);
+    }
+
+    #[test]
+    fn writes_the_required_sfnt_checksum_adjustment() {
+        let script_pack = ScriptPack {
+            id: String::from("checksum"),
+            display_name: String::from("Checksum"),
+            glyphs: vec!['A'],
+        };
+        let definitions = vec![notdef_glyph(), notdef_glyph()];
+        let font = build_ttf_from_definitions("Inkform Checksum", &script_pack, &definitions);
+
+        assert_eq!(table_checksum(&font), 0xB1B0_AFBA);
+    }
+
+    #[test]
+    fn uses_two_byte_search_fields_for_cmap_format_four() {
+        let params = format4_search_params(148);
+
+        assert_eq!(params.search_range, 256);
+        assert_eq!(params.entry_selector, 7);
+        assert_eq!(params.range_shift, 40);
     }
 }

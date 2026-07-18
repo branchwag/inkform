@@ -40,20 +40,12 @@ export default function HomePage() {
             boxShadow: "0 24px 60px var(--shadow)"
           }}
         >
-          <p
-            style={{
-              margin: 0,
-              letterSpacing: "0.18em",
-              textTransform: "uppercase",
-              color: "var(--accent-deep)",
-              fontSize: "0.78rem"
-            }}
-          >
+          <h1 className="inkform-masthead">
             Inkform
-          </p>
-          <h1 style={{ fontSize: "clamp(2.5rem, 7vw, 5rem)", margin: "0.75rem 0 1rem" }}>
-            Turn your handwriting into a digital typeface.
           </h1>
+          <h2 className="hero-heading">
+            Turn your handwriting into a digital typeface.
+          </h2>
           <p
             style={{
               fontSize: "1.15rem",
