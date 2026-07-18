@@ -228,7 +228,7 @@ export function GeneratorWorkbench() {
         >
           {isGenerating ? "Creating your preview..." : "Create my font preview"}
         </button>
-        {errorMessage ? <span style={{ color: "#932f1a" }}>{errorMessage}</span> : null}
+            {errorMessage ? <span style={{ color: "var(--danger)" }}>{errorMessage}</span> : null}
       </div>
 
       {result ? (
@@ -280,7 +280,7 @@ export function GeneratorWorkbench() {
                   border: "1px solid var(--border)",
                   borderRadius: "18px",
                   overflow: "hidden",
-                  background: "#f7efe3"
+                  background: "var(--preview-background)"
                 }}
               >
                 {previewSvgDataUrl !== null ? (
@@ -312,13 +312,13 @@ export function GeneratorWorkbench() {
               {result.preview.renderPlan}
             </p>
             {result.preview.previewVersion !== currentPreviewVersion ? (
-              <p style={{ marginBottom: 0, color: "#8a5b2d", lineHeight: 1.7 }}>
+              <p style={{ marginBottom: 0, color: "var(--notice)", lineHeight: 1.7 }}>
                 This preview result came from an older in-memory build. Generate the preview again
                 to refresh it with the current renderer.
               </p>
             ) : null}
             {!hasCurrentSvgPreview && previewFontState === "failed" ? (
-              <p style={{ marginBottom: 0, color: "#932f1a", lineHeight: 1.7 }}>
+              <p style={{ marginBottom: 0, color: "var(--danger)", lineHeight: 1.7 }}>
                 The generated font file could not be loaded into the browser preview. Downloading
                 may still work, but this on-page preview is currently falling back to the system
                 serif font.

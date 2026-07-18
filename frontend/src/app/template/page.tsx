@@ -54,7 +54,7 @@ export default function TemplatePage() {
           style={{
             display: "grid",
             gap: "0.75rem",
-            background: "#fffaf2",
+            background: "var(--surface-strong)",
             border: "1px solid var(--border)",
             borderRadius: "24px",
             padding: "1rem",
@@ -77,20 +77,20 @@ export default function TemplatePage() {
                   style={{
                     height: "132px",
                     borderRadius: "16px",
-                    border: "1px solid #dbcbb5",
-                    background: "white",
+                    border: "1px solid var(--template-border)",
+                    background: "var(--surface)",
                     padding: "0.45rem",
                     display: "flex",
                     flexDirection: "column",
                     justifyContent: "space-between"
                   }}
                 >
-                  <span style={{ color: "#8e6248", fontSize: "0.85rem" }}>
+                  <span style={{ color: "var(--template-label)", fontSize: "0.85rem" }}>
                     {glyph === " " ? "space" : glyph}
                   </span>
                   <div
                     style={{
-                      borderBottom: "1px dashed #d6c0ab",
+                      borderBottom: "1px dashed var(--template-guide)",
                       marginBottom: "0.65rem"
                     }}
                   />

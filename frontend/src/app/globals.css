@@ -9,6 +9,37 @@
   --accent-soft: #ddb189;
   --muted: #68584d;
   --shadow: rgba(72, 40, 18, 0.12);
+  --page-top: rgba(223, 183, 144, 0.45);
+  --page-start: #f7f0e5;
+  --page-end: #efe3cf;
+  --preview-background: #f7efe3;
+  --danger: #932f1a;
+  --notice: #8a5b2d;
+  --template-border: #dbcbb5;
+  --template-label: #8e6248;
+  --template-guide: #d6c0ab;
+}
+
+:root[data-theme="dark"] {
+  --background: #171311;
+  --foreground: #f7eadc;
+  --surface: rgba(39, 31, 27, 0.9);
+  --surface-strong: #2a211d;
+  --border: rgba(244, 216, 188, 0.18);
+  --accent: #d87442;
+  --accent-deep: #f2ad81;
+  --accent-soft: #7c422d;
+  --muted: #cbb8a8;
+  --shadow: rgba(0, 0, 0, 0.38);
+  --page-top: rgba(134, 62, 34, 0.45);
+  --page-start: #1d1714;
+  --page-end: #100d0b;
+  --preview-background: #201814;
+  --danger: #ffad91;
+  --notice: #f5c083;
+  --template-border: #6a5141;
+  --template-label: #efb18a;
+  --template-guide: #745746;
 }
 
 * {
@@ -23,8 +54,8 @@ body {
   margin: 0;
   min-height: 100vh;
   background:
-    radial-gradient(circle at top, rgba(223, 183, 144, 0.45), transparent 42%),
-    linear-gradient(180deg, #f7f0e5 0%, #efe3cf 100%);
+    radial-gradient(circle at top, var(--page-top), transparent 42%),
+    linear-gradient(180deg, var(--page-start) 0%, var(--page-end) 100%);
   color: var(--foreground);
   font-family: Georgia, "Times New Roman", serif;
 }
@@ -38,4 +69,59 @@ button,
 input,
 textarea {
   font: inherit;
+}
+
+input,
+textarea {
+  color: var(--foreground);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.theme-toggle {
+  position: fixed;
+  z-index: 20;
+  top: 1rem;
+  right: 1rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-strong);
+  box-shadow: 0 10px 28px var(--shadow);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  border-color: var(--accent);
+}
+
+.theme-toggle:focus-visible {
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 3px;
+}
+
+.theme-toggle__mark {
+  color: var(--accent-deep);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.theme-toggle__label {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+@media (max-width: 640px) {
+  .theme-toggle {
+    top: 0.7rem;
+    right: 0.7rem;
+  }
 }
