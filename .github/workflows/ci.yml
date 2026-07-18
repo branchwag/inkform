@@ -105,14 +105,49 @@ jobs:
         run: |
           Add-Type @'
           using System;
+          using System.Text;
           using System.Runtime.InteropServices;
 
           public static class InkformFontValidator {
+              [StructLayout(LayoutKind.Sequential)]
+              public struct GlyphMetrics {
+                  public uint BlackBoxX;
+                  public uint BlackBoxY;
+                  public int OriginX;
+                  public int OriginY;
+                  public short CellIncrementX;
+                  public short CellIncrementY;
+              }
+
               [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
               public static extern int AddFontResourceEx(string fileName, uint flags, IntPtr reserved);
 
               [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
               public static extern bool RemoveFontResourceEx(string fileName, uint flags, IntPtr reserved);
+
+              [DllImport("gdi32.dll", SetLastError = true)]
+              public static extern IntPtr CreateCompatibleDC(IntPtr deviceContext);
+
+              [DllImport("gdi32.dll", SetLastError = true)]
+              public static extern bool DeleteDC(IntPtr deviceContext);
+
+              [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+              public static extern IntPtr CreateFontW(
+                  int height, int width, int escapement, int orientation, int weight,
+                  uint italic, uint underline, uint strikeOut, uint characterSet,
+                  uint outputPrecision, uint clipPrecision, uint quality,
+                  uint pitchAndFamily, string faceName);
+
+              [DllImport("gdi32.dll", SetLastError = true)]
+              public static extern IntPtr SelectObject(IntPtr deviceContext, IntPtr graphicObject);
+
+              [DllImport("gdi32.dll", SetLastError = true)]
+              public static extern bool DeleteObject(IntPtr graphicObject);
+
+              [DllImport("gdi32.dll", SetLastError = true)]
+              public static extern uint GetGlyphOutlineW(
+                  IntPtr deviceContext, uint character, uint format, out GlyphMetrics metrics,
+                  uint bufferSize, IntPtr buffer, IntPtr matrix);
           }
           '@
 
@@ -123,4 +158,23 @@ jobs:
               throw "GDI rejected generated font. Win32 error: $lastError"
           }
 
-          [void][InkformFontValidator]::RemoveFontResourceEx($env:FONT_PATH, $flags, [IntPtr]::Zero)
+          $deviceContext = [InkformFontValidator]::CreateCompatibleDC([IntPtr]::Zero)
+          $font = [InkformFontValidator]::CreateFontW(-96, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, "Inkform")
+          if ($deviceContext -eq [IntPtr]::Zero -or $font -eq [IntPtr]::Zero) {
+              throw "GDI could not create a font drawing context."
+          }
+
+          try {
+              [void][InkformFontValidator]::SelectObject($deviceContext, $font)
+              foreach ($character in @([uint32][char]'A', [uint32][char]'e')) {
+                  $metrics = New-Object InkformFontValidator+GlyphMetrics
+                  $result = [InkformFontValidator]::GetGlyphOutlineW($deviceContext, $character, 0, [ref]$metrics, 0, [IntPtr]::Zero, [IntPtr]::Zero)
+                  if ($result -eq [uint32]0xFFFFFFFF -or $metrics.BlackBoxX -eq 0 -or $metrics.BlackBoxY -eq 0) {
+                      throw "GDI could not outline character $([char]$character) from the generated font."
+                  }
+              }
+          } finally {
+              [void][InkformFontValidator]::DeleteObject($font)
+              [void][InkformFontValidator]::DeleteDC($deviceContext)
+              [void][InkformFontValidator]::RemoveFontResourceEx($env:FONT_PATH, $flags, [IntPtr]::Zero)
+          }
